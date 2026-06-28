@@ -1,0 +1,16 @@
+[Unit]
+Description=QQ with Prometheus Feed Archiver
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+# 项目不在 ~/Projects/prometheus 时改此行
+ExecStart=/bin/bash %h/Projects/prometheus/scripts/start_qq.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

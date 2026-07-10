@@ -9,6 +9,9 @@
 | `media_index.jsonl` | JSON Lines | 媒体索引（url → file/source/type/size） |
 | `media/` | 二进制文件 | 下载的图片/视频（SHA256 前 16 位命名） |
 | `ids.json` | 纯文本 | 帖子 ID 去重表（每行一个 ID） |
+| `dead_media.jsonl` | JSON Lines | 临时失效媒体队列（重试中，跨重启持久化） |
+| `dead_media_permanent.jsonl` | JSON Lines | 永久失效 URL（3 次重试失败，启动时加载到 mediaSeen 跳过） |
+| `state.json` | JSON | 守护状态快照（feeds/comments 哈希、触底标记） |
 | `prometheus.log` | 纯文本 | 运行日志 |
 
 ## feeds.jsonl 字段（每条 80+）

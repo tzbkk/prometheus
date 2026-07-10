@@ -47,7 +47,10 @@ setInterval(()=>{try{fs.writeFileSync(CFG.dataDir+"/ids.json",[...capturedIds].j
 
 const mediaSeen = new Set();
 const mediaQueue = [];
+const deadMediaQueue = [];
+try { (fs.readFileSync(CFG.dataDir+"/dead_media.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{deadMediaQueue.push(JSON.parse(l))}catch(e){}}); } catch(e) {}
 try { (fs.readFileSync(CFG.dataDir+"/media_index.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{var e=JSON.parse(l);if(e.url)mediaSeen.add(e.url)}catch(e){}}); } catch(e) {}
+try { (fs.readFileSync(CFG.dataDir+"/dead_media_permanent.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{mediaSeen.add(JSON.parse(l).url)}catch(e){}}); } catch(e) {}
 try { fs.mkdirSync(CFG.dataDir+"/media",{recursive:true}); } catch(e) {}
 
 const STATE_FILES = ['feeds.jsonl', 'ids.json'];
@@ -328,7 +331,7 @@ if (electron && electron.app) {
         var hash = crypto.createHash('sha256').update(url).digest('hex').slice(0,16);
         var filename = hash + guessExt(url, type);
         var filepath = CFG.dataDir+"/media/"+filename;
-        if (fs.existsSync(filepath)) { appendMediaIndex(url, filename, type, source, 'cached', fs.statSync(filepath).size); return; }
+        if (fs.existsSync(filepath) && fs.statSync(filepath).size > 0) { appendMediaIndex(url, filename, type, source, 'cached', fs.statSync(filepath).size); return; }
         try {
             var req = net.request(url);
             var chunks = [];
@@ -339,12 +342,18 @@ if (electron && electron.app) {
                     try { fs.writeFileSync(filepath, buf); plog("Media: "+filename+" ("+buf.length+"B) from "+source); }
                     catch(e) { plog("Media write err: "+e.message); }
                     appendMediaIndex(url, filename, type, source, buf.length > 0 ? 'ok' : 'empty', buf.length);
+                    if (buf.length === 0 && source && source.startsWith('B_')) { var ex = deadMediaQueue.find(function(x){return x.url===url}); if (ex) { ex.retries=(ex.retries||0)+1; } else { deadMediaQueue.push({url:url, type:type, source:source, retries:1}); } flushDeadMedia(); }
                 });
             });
-            req.on('error', function(e) { appendMediaIndex(url, filename, type, source, 'error:'+e.message, 0); });
+            req.on('error', function(e) { appendMediaIndex(url, filename, type, source, 'error:'+e.message, 0); if (source && source.startsWith('B_')) { var ex = deadMediaQueue.find(function(x){return x.url===url}); if (ex) { ex.retries=(ex.retries||0)+1; } else { deadMediaQueue.push({url:url, type:type, source:source, retries:1}); } flushDeadMedia(); } });
             req.end();
-        } catch(e) { appendMediaIndex(url, filename, type, source, 'error:'+e.message, 0); }
+        } catch(e) { appendMediaIndex(url, filename, type, source, 'error:'+e.message, 0); if (source && source.startsWith('B_')) { var ex = deadMediaQueue.find(function(x){return x.url===url}); if (ex) { ex.retries=(ex.retries||0)+1; } else { deadMediaQueue.push({url:url, type:type, source:source, retries:1}); } flushDeadMedia(); } }
     }
+
+    function flushDeadMedia() {
+        try { fs.writeFileSync(CFG.dataDir+"/dead_media.jsonl", deadMediaQueue.map(function(x){return JSON.stringify(x)}).join("\n")+(deadMediaQueue.length?"\n":"")); } catch(e) {}
+    }
+    setInterval(flushDeadMedia, 10000);
 
     setInterval(function() {
         var n = 0;
@@ -722,7 +731,27 @@ if (electron && electron.app) {
         daemonCycle++;
         if (!timelineBottomReached) { plog("Daemon #"+daemonCycle+": skip (initial scroll in progress, feeds="+capturedIds.size+")"); return; }
         const wc = findChannelWc();
-        if (!wc) { plog("Daemon #"+daemonCycle+": no webContents, skip"); return; }
+        if (!wc) {
+            plog("Daemon #"+daemonCycle+": no webContents, navigating to guild...");
+            switchToGuild();
+            setTimeout(() => { clickChannel(); }, 5000);
+            return;
+        }
+
+        if (deadMediaQueue.length > 0) {
+            plog("Daemon #"+daemonCycle+": retrying " + deadMediaQueue.length + " dead media downloads");
+            for (let i = deadMediaQueue.length - 1; i >= 0; i--) {
+                const item = deadMediaQueue[i];
+                if ((item.retries||0) >= 3) {
+                    deadMediaQueue.splice(i, 1);
+                    try { fs.appendFileSync(CFG.dataDir+"/dead_media_permanent.jsonl", JSON.stringify({url:item.url})+"\n"); } catch(e) {}
+                } else {
+                    item.retries = (item.retries||0) + 1;
+                    mediaQueue.push({url:item.url, type:item.type, source:item.source});
+                }
+            }
+            flushDeadMedia();
+        }
 
         daemonScrollToTop(wc);
         plog("Daemon #"+daemonCycle+": "+capturedIds.size+" feeds, "+capturedCommentKeys.size+" comment batches, "+mediaQueue.length+" media queued, "+traversedPostIds.size+" traversed, bottom="+timelineBottomReached);
@@ -779,17 +808,15 @@ if (electron && electron.app) {
                 const lines = fs.readFileSync(CFG.dataDir+"/feeds.jsonl","utf8").split("\n").filter(Boolean);
                 for (const l of lines) { try { const d = JSON.parse(l); if (d.id && (d.commentCount||0) === 0) traversedPostIds.add(d.id); } catch(e) {} }
                 plog("Daemon: marked "+traversedPostIds.size+" existing posts as traversed, starting daemon (interval="+CFG.daemonInterval+"ms)");
-                // Rebuild media queue from existing feeds (in-memory queue lost on restart)
-                try {
-                    let requeued = 0;
-                    for (const l of lines) {
-                        try { const d = JSON.parse(l); if (d.id) { const before = mediaQueue.length; queueMedia(extractMediaUrls(d), d.id); if (mediaQueue.length > before) requeued++; } } catch(e) {}
-                    }
-                    if (requeued > 0) plog("Daemon: requeued media from "+requeued+" feeds ("+mediaQueue.length+" queued)");
-                } catch(e) {}
-            } catch(e) {}
-            setInterval(daemonLoop, CFG.daemonInterval);
-        }, 160000);
+                let requeued = 0;
+                for (const l of lines) {
+                    try { const d = JSON.parse(l); if (d.id) { const before = mediaQueue.length; queueMedia(extractMediaUrls(d), d.id); if (mediaQueue.length > before) requeued++; } } catch(e) {}
+                }
+                if (requeued > 0) plog("Daemon: requeued media from "+requeued+" feeds ("+mediaQueue.length+" queued)");
+                setInterval(daemonLoop, CFG.daemonInterval);
+                setTimeout(() => daemonLoop(), 15000);
+            } catch(e) { plog("Daemon startup err: "+e.message); }
+        }, 150000);
     }
 }
 

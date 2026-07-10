@@ -25,9 +25,9 @@ echo "Target:   $PATCHED_DIR"
 echo "QQ ver:   $PROMETHEUS_QQ_VERSION"
 
 if [ -d "$PATCHED_DIR" ]; then
-    echo "[1/4] $PATCHED_DIR already exists, skipping extract"
+    echo "[1/3] $PATCHED_DIR already exists, skipping extract"
 else
-    echo "[1/4] Extracting AppImage..."
+    echo "[1/3] Extracting AppImage..."
     TMPDIR=$(mktemp -d)
     cd "$TMPDIR"
     "$APPIMAGE" --appimage-extract
@@ -36,13 +36,21 @@ else
     echo "      Extracted to: $PATCHED_DIR"
 fi
 
-echo "[2/4] Injecting prometheus.js..."
+PKG="$PATCHED_DIR/resources/app/package.json"
+PKG_VER=$(python3 -c "import json; print(json.load(open('$PKG')).get('version','?'))")
+echo "      QQ version: $PKG_VER"
+
+echo "[2/3] Injecting prometheus.js..."
 cp "$PROJECT_DIR/src/prometheus/inject.js" "$PATCHED_DIR/resources/app/app_launcher/prometheus.js"
+python3 -c "
+import json
+with open('$PKG') as f: pkg = json.load(f)
+pkg['main'] = './app_launcher/prometheus.js'
+with open('$PKG', 'w') as f: json.dump(pkg, f, indent=2, ensure_ascii=False)
+print(f'      main -> {pkg[\"main\"]}')
+"
 
-echo "[3/4] Patching package.json..."
-cp "$PROJECT_DIR/src/prometheus/package_patched.json" "$PATCHED_DIR/resources/app/package.json"
-
-echo "[4/4] Setting permissions..."
+echo "[3/3] Setting permissions..."
 chmod +x "$PATCHED_DIR/qq" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/start_qq.sh"
 chmod +x "$PROJECT_DIR/src/prometheus/autoscroll.py"

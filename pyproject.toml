@@ -16,4 +16,4 @@ prometheus = "prometheus.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-prometheus = ["inject.js", "package_patched.json"]
+prometheus = ["inject.js"]

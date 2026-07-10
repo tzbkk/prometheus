@@ -21,7 +21,6 @@ prometheus/
 │       ├── config.py             # 配置加载器
 │       ├── _envconfig.py         # bash 环境变量发射器
 │       ├── inject.js             # 注入脚本（核心，读 env，被复制进 AppImage）
-│       ├── package_patched.json  # 修改后的 package.json 模板
 │       ├── autoscroll.py         # ydotool 自动滚动（已弃用）
 │       ├── keyring.py            # SQLCipher 密钥提取
 │       ├── cipher.py             # SQLCipher AES-256-CBC 解密
@@ -33,6 +32,9 @@ prometheus/
 │   ├── feeds.jsonl               # 帖子归档
 │   ├── comments.jsonl            # 评论归档
 │   ├── media_index.jsonl         # 媒体索引
+│   ├── dead_media.jsonl          # 临时失效媒体队列（重试中）
+│   ├── dead_media_permanent.jsonl # 永久失效 URL（3 次重试后放弃）
+│   ├── state.json                # 守护状态快照
 │   ├── media/                    # 下载的图片/视频
 │   ├── ids.json                  # 帖子 ID 去重表
 │   └── prometheus.log            # 运行日志
@@ -50,10 +52,9 @@ scp -r prometheus/ newhost:~/Projects/
 #    https://im.qq.com/linuxqq/index.shtml
 
 # 3. 运行安装脚本（patched QQ 会解包到项目内 qq_patched/）
-#    安装后 setup.sh 会自动 patch package.json 版本号为 3.2.29-49738，
-#    防止 hotUpdate 机制在启动后 30s 触发崩溃（详见 ARCHITECTURE.md）。
+#    setup.sh 保留 AppImage 原始版本号，仅修改 package.json 入口指向注入脚本。
 cd ~/Projects/prometheus
-bash scripts/setup.sh ~/Downloads/QQ_3.2.28_260429_x86_64_01.AppImage
+bash scripts/setup.sh ~/Downloads/QQ_3.2.29_260528_x86_64_01.AppImage
 
 # 4. 启动
 bash scripts/start_qq.sh

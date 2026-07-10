@@ -4,13 +4,12 @@
 
 | 项目 | 值 |
 |------|-----|
-| 原始 AppImage | QQ_3.2.28_260429_x86_64_01.AppImage (build 48517) |
+| AppImage | 任意版本（已验证 3.2.29-49738） |
 | 解包目录 | `qq_patched/` |
-| package.json version | `3.2.29-49738`（欺骗 hotUpdate，防止自动更新检测） |
-| 原生模块 | 3.2.28 与 3.2.29 **文件大小完全一致**，可互换 |
-| `~/.config/QQ/versions/config.json` | `curVersion: 3.2.29-49738`（hotUpdate 认为已是最新版，跳过更新） |
+| package.json | 保留原始版本号，仅修改 `main` 字段指向 `prometheus.js` |
+| `~/.config/QQ/versions/config.json` | 初始化为空 `{}`，QQ 自动写入正确版本 |
 
-**注意**：正常 QQ (3.2.29 AppImage) 与 patched QQ 共享 `~/.config/QQ/` 会互相覆写配置 → 崩溃。必须串行使用。
+`setup.sh` 动态读取 AppImage 的原始版本号，不再硬编码或伪装版本。同一个 `patched` 目录可以对应任意版本 AppImage。
 
 ## 注入流程
 
@@ -104,27 +103,28 @@ QQ 评论存在两个传输路径：
 
 ## 启动参数
 
-`--disable-background-networking`：阻止 Chromium 后台网络更新。QQ 3.2.28→3.2.29 自动更新触发 hotUpdate 机制，在 `setLauncherCounts` 后约 30s 导致 Network Service 崩溃 → SIGTRAP → FATAL。此参数消除崩溃。
+`--disable-background-networking`：阻止 Chromium 后台网络更新。QQ 的 hotUpdate 机制在启动后约 30s 触发 `setLauncherCounts` → Network Service 崩溃 → SIGTRAP → FATAL。此参数消除崩溃。
 
-若正常 QQ (3.2.29 AppImage) 与 patched QQ (3.2.28) 同时运行，共享 `~/.config/QQ/` 会导致版本冲突。patched QQ 运行前必须关闭正常 QQ。
+`--no-sandbox`：WSL2 / Wayland 下 Electron GPU sandbox 不可用，不加则 GPU 进程无法启动。
 
 ## 媒体下载
 
 - **递归扫描** feeds/comments 中所有 CDN URL（`qpic.cn` / `myqcloud.com` / `photo.store` / `qlogo` / `qchannelvideo`）
 - **`electron.net.request`** 下载 → 自动携带 session cookies → 鉴权视频 URL 无需额外处理
 - **去重**：URL SHA256 前 16 位命名 + `mediaSeen` Set + 启动时加载 `media_index.jsonl`
+- **失效重试**：下载 0 字节或网络错误 → 写入 `dead_media.jsonl`（持久化），每 daemon 周期重试同一 URL，最多 3 次；超过后写入 `dead_media_permanent.jsonl`，启动时加载到 `mediaSeen` 永久跳过
 - 产出：`data/media/<hash>.<ext>` + 索引 `data/media_index.jsonl`（`source` 字段可追溯到帖子/评论 ID）
 
 ## 限制
 
 - QQ 的 CDP / V8 inspector 被编译期移除，无法用标准 DevTools
-- asar 文件全部加密，无法直接修改
+- asar 文件有完整性校验，直接修改会破坏签名；但通过 `require()` 从外部入口加载不受影响
 - Feed API 走 `wrapper.node` 私有协议（非 HTTPS），无法用 SSL key log 拦截；但 `JSON.parse` hook 在传输层之上截获，不依赖 SSL
 - 评论 API（`GetFeedComments`）走 HTTPS 返回空 vecComment —— 该端点已被 QQ 服务端废弃，所有调用者（包括 QQ 自身 web 客户端）均返回空
 - wrapper.node 由 major.node 通过 C++ dlopen 加载，不经过 Node.js require → 无法从 JS 层 hook 直接调用 `NodeIKernelGuildService.fetchComments()`
 - VR 导航是唯一可靠获取评论的方式，但每帖 3s 限速（5h / 5893 帖）
 - 正常 QQ (3.2.29) 和 patched QQ (3.2.28) 共享 `~/.config/QQ/` 时互相覆写配置文件 → 版本冲突崩溃，必须串行使用
+- 正常 QQ 与 patched QQ 共享 `~/.config/QQ/` 会互相覆写配置 → 版本冲突崩溃，必须串行使用
 - QQ hotUpdate 在 ~30s 后触发 `setLauncherCounts` → Network Service 崩溃 → SIGTRAP → FATAL；`--disable-background-networking` 修复
-- ~~`sendInputEvent` 对 `vue-recycle-scroller` 无效~~ → 已通过直接 `scrollTop` 操纵解决
 - ~~ydotool 补充滚动~~ → Wayland 下 ydotool 滚当前焦点窗口，QQ 失焦时会滚到 GNOME；`autoscroll.py` 已不推荐使用
 - ~~GNOME Mutter 遮挡/非活跃 workspace 时停止 `wl_surface.frame` 回调 → `requestAnimationFrame` 不触发 → 滚动停止~~ → 已用 RAF polyfill（`setTimeout` 替代）解决

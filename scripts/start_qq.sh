@@ -13,8 +13,8 @@ if [ ! -x "$QQ_BIN" ]; then
     exit 1
 fi
 
-if [ ! -f "$PROJECT_DIR/prometheus.conf.json" ]; then
-    echo "ERROR: prometheus.conf.json not found in $PROJECT_DIR" >&2
+if [ ! -f "$PROJECT_DIR/conf/prometheus.conf.json" ]; then
+    echo "ERROR: conf/prometheus.conf.json not found in $PROJECT_DIR" >&2
     exit 1
 fi
 

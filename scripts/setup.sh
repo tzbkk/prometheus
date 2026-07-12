@@ -3,7 +3,7 @@ set -e
 
 # Prometheus installer: build a portable patched QQ from an AppImage.
 # Usage: bash scripts/setup.sh [/path/to/QQ.AppImage]
-# All paths/tunables come from prometheus.conf.json (via _envconfig.py).
+# All paths/tunables come from conf/prometheus.conf.json (via _envconfig.py).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -11,7 +11,7 @@ eval "$(python3 "$PROJECT_DIR/src/prometheus/_envconfig.py")"
 
 APPIMAGE="${1:-${PROMETHEUS_APPIMAGE/#\~/$HOME}}"
 if [ -z "$APPIMAGE" ]; then
-    echo "Error: AppImage path not set. Pass it as arg or set 'appimage' in prometheus.conf.json" >&2
+    echo "Error: AppImage path not set. Pass it as arg or set 'appimage' in conf/prometheus.conf.json" >&2
     exit 1
 fi
 PATCHED_DIR="${PROMETHEUS_PATCHED_DIR/#\~/$HOME}"
@@ -40,8 +40,11 @@ PKG="$PATCHED_DIR/resources/app/package.json"
 PKG_VER=$(python3 -c "import json; print(json.load(open('$PKG')).get('version','?'))")
 echo "      QQ version: $PKG_VER"
 
-echo "[2/3] Injecting prometheus.js..."
+echo "[2/3] Injecting prometheus.js + modules..."
 cp "$PROJECT_DIR/src/prometheus/inject.js" "$PATCHED_DIR/resources/app/app_launcher/prometheus.js"
+cp "$PROJECT_DIR/src/prometheus/logger.js" "$PATCHED_DIR/resources/app/app_launcher/logger.js"
+cp "$PROJECT_DIR/src/prometheus/lock.js" "$PATCHED_DIR/resources/app/app_launcher/lock.js"
+cp "$PROJECT_DIR/src/prometheus/api-server.js" "$PATCHED_DIR/resources/app/app_launcher/api-server.js"
 python3 -c "
 import json
 with open('$PKG') as f: pkg = json.load(f)

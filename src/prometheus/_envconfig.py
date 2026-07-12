@@ -23,7 +23,7 @@ from pathlib import Path
 def main() -> int:
     cfg_path = Path(
         os.environ.get("PROMETHEUS_CONFIG")
-        or (Path(__file__).resolve().parent.parent.parent / "prometheus.conf.json")
+        or (Path(__file__).resolve().parent.parent.parent / "conf" / "prometheus.conf.json")
     )
     raw = json.loads(cfg_path.read_text(encoding="utf-8"))
 

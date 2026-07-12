@@ -1,0 +1,8 @@
+{
+  "launcher_port": 9421,
+  "max_restarts": 5,
+  "restart_delay": 5,
+  "qq_start_script": "scripts/start_qq.sh",
+  "start_tui": true,
+  "api_version": "1"
+}

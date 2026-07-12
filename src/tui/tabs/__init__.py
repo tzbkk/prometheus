@@ -1,0 +1,1 @@
+"""TUI tab registry package."""

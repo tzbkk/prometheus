@@ -2,9 +2,14 @@
 // Reads PROMETHEUS_* env vars (not the JSON config) because this file gets
 // copied INTO the AppImage at setup time and can no longer reach the project
 // tree. start_qq.sh sources prometheus.conf.json → exports these env vars.
+global.__promStartTime = Date.now();
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+
+const { Logger } = require("./logger.js");
+const { Lock } = require("./lock.js");
+const { ApiServer } = require("./api-server.js");
 
 const E = process.env;
 const CFG = {
@@ -32,9 +37,29 @@ try {
     CFG.startupSequence = [];
 }
 
-function plog(m) { try { fs.appendFileSync(CFG.dataDir + "/prometheus.log", `[${new Date().toISOString()}] ${m}\n`); } catch(e) {} }
+CFG.apiPort = parseInt(E.PROMETHEUS_API_PORT || "9420", 10);
+CFG.logBufferLines = parseInt(E.PROMETHEUS_LOG_BUFFER_LINES || "500", 10);
+CFG.logLevel = E.PROMETHEUS_LOG_LEVEL || "INFO";
+CFG.apiVersion = E.PROMETHEUS_API_VERSION || "1";
+try {
+    const confPath = path.join(__dirname, "..", "..", "..", "conf", "prometheus.conf.json");
+    const fileConf = JSON.parse(fs.readFileSync(confPath, "utf8"));
+    if (!E.PROMETHEUS_API_PORT && fileConf.api_port) CFG.apiPort = fileConf.api_port;
+    if (!E.PROMETHEUS_LOG_BUFFER_LINES && fileConf.log_buffer_lines) CFG.logBufferLines = fileConf.log_buffer_lines;
+    if (!E.PROMETHEUS_LOG_LEVEL && fileConf.log_level) CFG.logLevel = fileConf.log_level;
+    if (!E.PROMETHEUS_API_VERSION && fileConf.api_version) CFG.apiVersion = fileConf.api_version;
+} catch(e) {}
+
+const logger = new Logger({
+    logDir: path.join(path.dirname(CFG.dataDir), "log", "prometheus"),
+    logLevel: CFG.logLevel,
+    bufferLines: CFG.logBufferLines
+});
+
+const lock = new Lock({dataDir: CFG.dataDir, logger: logger});
+
 try { fs.mkdirSync(CFG.dataDir, {recursive:true}); } catch(e) {}
-plog("=== Start === config: " + JSON.stringify({
+logger.log("INFO", "=== Start === config: " + JSON.stringify({
     channelId: CFG.channelId, channelName: CFG.channelName,
     scanDepth: CFG.scanDepth, feedIdPrefix: CFG.feedIdPrefix
 }));
@@ -42,7 +67,7 @@ plog("=== Start === config: " + JSON.stringify({
 const capturedIds = new Set();
 try { (fs.readFileSync(CFG.dataDir+"/ids.json","utf8")||"").split("\n").filter(Boolean).forEach(id => capturedIds.add(id)); } catch(e) {}
 try { fs.readFileSync(CFG.dataDir+"/feeds.jsonl","utf8").split("\n").filter(Boolean).forEach(l=>{try{const d=JSON.parse(l);if(d.id)capturedIds.add(d.id)}catch(e){}}); } catch(e) {}
-plog("Loaded "+capturedIds.size+" IDs");
+logger.log("INFO", "Loaded "+capturedIds.size+" IDs");
 setInterval(()=>{try{fs.writeFileSync(CFG.dataDir+"/ids.json",[...capturedIds].join("\n"))}catch(e){}},10000);
 
 const mediaSeen = new Set();
@@ -53,7 +78,7 @@ try { (fs.readFileSync(CFG.dataDir+"/media_index.jsonl","utf8")||"").split("\n")
 try { (fs.readFileSync(CFG.dataDir+"/dead_media_permanent.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{mediaSeen.add(JSON.parse(l).url)}catch(e){}}); } catch(e) {}
 try { fs.mkdirSync(CFG.dataDir+"/media",{recursive:true}); } catch(e) {}
 
-const STATE_FILES = ['feeds.jsonl', 'ids.json'];
+const STATE_FILES = ['feeds.jsonl'];
 function computeStateHash() {
     const parts = [];
     for (const f of STATE_FILES) {
@@ -75,10 +100,8 @@ function readState() {
         if (!state.hash) return null;
         const currentHash = computeStateHash();
         if (currentHash !== state.hash) {
-            plog("State: hash mismatch (saved=" + (state.hash||'').slice(0,16) + " cur=" + currentHash.slice(0,16) + ")");
-            return null;
+            logger.log("DEBUG", "State: hash mismatch (saved=" + (state.hash||'').slice(0,16) + " cur=" + currentHash.slice(0,16) + ") — data grew since last cycle, ok");
         }
-        plog("State: verified, bottom=" + state.bottomReached + " feeds=" + state.feeds);
         return state;
     } catch(e) { return null; }
 }
@@ -117,7 +140,7 @@ function saveFeed(o) { try { const fid=o.id||""; if(!fid||capturedIds.has(fid))r
 
 const capturedCommentKeys = new Set();
 try { (fs.readFileSync(CFG.dataDir+"/comments.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{const k=computeCommentKey(JSON.parse(l));if(k)capturedCommentKeys.add(k)}catch(e){}}); } catch(e) {}
-plog("Loaded "+capturedCommentKeys.size+" comment keys");
+logger.log("INFO", "Loaded "+capturedCommentKeys.size+" comment keys");
 
 function computeCommentKey(o) {
     try {
@@ -156,7 +179,7 @@ function deepScanComments(obj, source, depth) {
     try {
         if (Array.isArray(obj.vecComment) && obj.vecComment.length > 0) {
             saveComment(JSON.stringify({_s: source, ts: Date.now(), d: {totalNum: obj.totalNum, vecComment: obj.vecComment}}));
-            plog("COMMENT HIT via " + source + " (" + obj.vecComment.length + " comments)");
+            logger.log("INFO", "COMMENT HIT via " + source + " (" + obj.vecComment.length + " comments)");
         }
     } catch(e) {}
     for (const k in obj) {
@@ -308,7 +331,7 @@ setTimeout(function(){
 })();
 `;
 
-let electron; try { electron=require("electron") } catch(e) { plog("No electron") }
+let electron; try { electron=require("electron") } catch(e) { logger.log("WARN", "No electron") }
 
 if (electron && electron.app) {
     const { app, BrowserWindow, net } = electron;
@@ -332,6 +355,7 @@ if (electron && electron.app) {
         var filename = hash + guessExt(url, type);
         var filepath = CFG.dataDir+"/media/"+filename;
         if (fs.existsSync(filepath) && fs.statSync(filepath).size > 0) { appendMediaIndex(url, filename, type, source, 'cached', fs.statSync(filepath).size); return; }
+        try { lock.addPendingMedia(url, filename, 0); } catch(e) {}
         try {
             var req = net.request(url);
             var chunks = [];
@@ -339,15 +363,16 @@ if (electron && electron.app) {
                 resp.on('data', function(c) { chunks.push(c); });
                 resp.on('end', function() {
                     var buf = Buffer.concat(chunks);
-                    try { fs.writeFileSync(filepath, buf); plog("Media: "+filename+" ("+buf.length+"B) from "+source); }
-                    catch(e) { plog("Media write err: "+e.message); }
+                    try { fs.writeFileSync(filepath, buf); logger.log("INFO", "Media: "+filename+" ("+buf.length+"B) from "+source); }
+                    catch(e) { logger.log("ERROR", "Media write err: " + e.message); }
+                    try { lock.removePendingMedia(url); } catch(e) {}
                     appendMediaIndex(url, filename, type, source, buf.length > 0 ? 'ok' : 'empty', buf.length);
                     if (buf.length === 0 && source && source.startsWith('B_')) { var ex = deadMediaQueue.find(function(x){return x.url===url}); if (ex) { ex.retries=(ex.retries||0)+1; } else { deadMediaQueue.push({url:url, type:type, source:source, retries:1}); } flushDeadMedia(); }
                 });
             });
-            req.on('error', function(e) { appendMediaIndex(url, filename, type, source, 'error:'+e.message, 0); if (source && source.startsWith('B_')) { var ex = deadMediaQueue.find(function(x){return x.url===url}); if (ex) { ex.retries=(ex.retries||0)+1; } else { deadMediaQueue.push({url:url, type:type, source:source, retries:1}); } flushDeadMedia(); } });
+            req.on('error', function(e) { appendMediaIndex(url, filename, type, source, 'error:'+e.message, 0); try { lock.removePendingMedia(url); } catch(e2) {}; if (source && source.startsWith('B_')) { var ex = deadMediaQueue.find(function(x){return x.url===url}); if (ex) { ex.retries=(ex.retries||0)+1; } else { deadMediaQueue.push({url:url, type:type, source:source, retries:1}); } flushDeadMedia(); } });
             req.end();
-        } catch(e) { appendMediaIndex(url, filename, type, source, 'error:'+e.message, 0); if (source && source.startsWith('B_')) { var ex = deadMediaQueue.find(function(x){return x.url===url}); if (ex) { ex.retries=(ex.retries||0)+1; } else { deadMediaQueue.push({url:url, type:type, source:source, retries:1}); } flushDeadMedia(); } }
+        } catch(e) { appendMediaIndex(url, filename, type, source, 'error:'+e.message, 0); try { lock.removePendingMedia(url); } catch(e2) {}; if (source && source.startsWith('B_')) { var ex = deadMediaQueue.find(function(x){return x.url===url}); if (ex) { ex.retries=(ex.retries||0)+1; } else { deadMediaQueue.push({url:url, type:type, source:source, retries:1}); } flushDeadMedia(); } }
     }
 
     function flushDeadMedia() {
@@ -371,7 +396,7 @@ if (electron && electron.app) {
                 try { for (const a of args) { if (a && typeof a === 'object') deepScanComments(a, 'wc_send:'+ch, 0); } } catch(e) {}
                 return origSend(ch, ...args);
             };
-        } catch(e) { plog("wc.send wrap err: " + e.message); }
+        } catch(e) { logger.log("WARN", "wc.send wrap err: " + e.message); }
         wc.on('dom-ready', () => {
             wc.executeJavaScript(INJECT_JS).catch(()=>{});
             // Comment hooks (IPC/fetch/XHR/bridge) inject after a brief settle
@@ -385,8 +410,8 @@ if (electron && electron.app) {
                 try { const m = msg.match(/[?&]bkn=(\d+)/); if (m) globalBkn = m[1]; } catch(e) {}
             }
             else if (msg.startsWith('[P]')) { try { saveFeed(JSON.parse(msg.substring(3))); } catch(err) {} }
-            else if (msg.startsWith('[Prometheus]')) plog("R: "+msg);
-            else if (lvl > 2) plog("E: "+msg.slice(0,200));
+            else if (msg.startsWith('[Prometheus]')) logger.log("INFO", "R: "+msg);
+            else if (lvl > 2) logger.log("ERROR", "E: "+msg.slice(0,200));
         });
     });
 
@@ -447,7 +472,31 @@ if (electron && electron.app) {
 
     let scrollCount = 0;
     const savedState = readState();
-    let timelineBottomReached = (savedState && savedState.bottomReached) || false;
+
+    const lockBottom = lock.readBottomReached();
+    let timelineBottomReached = (lockBottom !== undefined)
+        ? lockBottom
+        : ((savedState && savedState.bottomReached) || false);
+
+    const recovery = lock.checkAndRecover();
+    if (recovery && recovery.crashed) {
+        logger.log("WARN", "Crash recovery: dirty lock detected, bottomReached=" + recovery.bottomReached);
+        if (recovery.bottomReached !== undefined) {
+            timelineBottomReached = recovery.bottomReached;
+        }
+        if (recovery.pendingMedia && recovery.pendingMedia.length > 0) {
+            logger.log("INFO", "Crash recovery: re-downloading " + recovery.pendingMedia.length + " pending media");
+            recovery.pendingMedia.forEach(function(m) {
+                if (!mediaSeen.has(m.url)) {
+                    mediaQueue.push({url: m.url, type: m.type || 'image', source: m.source || 'recovery'});
+                }
+            });
+        }
+    }
+
+    if (timelineBottomReached && lock.readBottomReached() !== true) {
+        lock.setBottomReached(true);
+    }
 
     // Probe QQ's DOM/Vue state for "timeline bottom" signals. Logs only when something interesting found
     // (or every 200 iter as snapshot) to keep noise low.
@@ -499,7 +548,7 @@ if (electron && electron.app) {
                 var atScrollBottom = curCH > 0 && (curST + curCH) / curSH > 0.985;
                 var now = Date.now();
                 if (hasInd || atScrollBottom || now - probeLastLog > 60000) {
-                    plog("Probe " + scrollCount + " sh="+curSH+" st="+curST+" ch="+curCH+" bottom="+atScrollBottom+" feeds="+capturedIds.size+" ind="+JSON.stringify(d.ind||[]));
+                    logger.log("DEBUG", "Probe " + scrollCount + " sh="+curSH+" st="+curST+" ch="+curCH+" bottom="+atScrollBottom+" feeds="+capturedIds.size+" ind="+JSON.stringify(d.ind||[]));
                     probeLastLog = now;
                 }
                 if (curSH > 0) {
@@ -508,13 +557,15 @@ if (electron && electron.app) {
                         probeStall++;
                         if (probeStall >= PROBE_STALL_MAX && !timelineBottomReached) {
                             timelineBottomReached = true;
-                            plog("BOTTOM DETECTED: scrollHeight stuck at " + curSH + " for " + probeStall + " probes, feeds=" + capturedIds.size);
+                            lock.setBottomReached(true);
+                            logger.log("INFO", "BOTTOM DETECTED: scrollHeight stuck at " + curSH + " for " + probeStall + " probes, feeds=" + capturedIds.size);
                         }
                     }
                 }
                 if (hasInd) {
                     timelineBottomReached = true;
-                    plog("BOTTOM DETECTED via UI text: " + JSON.stringify(d.ind));
+                    lock.setBottomReached(true);
+                    logger.log("INFO", "BOTTOM DETECTED via UI text: " + JSON.stringify(d.ind));
                 }
             } catch(e) {}
         }).catch(function(){});
@@ -543,19 +594,22 @@ if (electron && electron.app) {
                         return JSON.stringify({st: target.scrollTop, sh: target.scrollHeight, ch: target.clientHeight});
                     })()
                 `).then(function(r){
-                    if (scrollCount % 20 === 0) plog("ScrollJS "+scrollCount+" feeds:"+capturedIds.size+" "+r);
+                    if (scrollCount % 20 === 0) logger.log("DEBUG", "ScrollJS "+scrollCount+" feeds:"+capturedIds.size+" "+r);
                 }).catch(function(){});
                 scrollCount++;
-                if (scrollCount >= CFG.scrollMax) timelineBottomReached = true;
+                if (scrollCount >= CFG.scrollMax) {
+                    timelineBottomReached = true;
+                    lock.setBottomReached(true);
+                }
                 if (scrollCount % 50 === 0) {
-                    plog("Scroll #"+scrollCount+" feeds:"+capturedIds.size);
+                    logger.log("INFO", "Scroll #"+scrollCount+" feeds:"+capturedIds.size);
                     probeBottom(wc);
                 }
                 break;
             } catch(e) {}
         }
         if (scrollCount < CFG.scrollMax && !timelineBottomReached) setTimeout(doScroll, CFG.scrollInterval);
-        else plog("doScroll end: scrollCount="+scrollCount+" bottom="+timelineBottomReached+" feeds="+capturedIds.size);
+        else logger.log("INFO", "doScroll end: scrollCount="+scrollCount+" bottom="+timelineBottomReached+" feeds="+capturedIds.size);
     }
 
     const actions = { switch_guild: switchToGuild, click_channel: clickChannel, start_scroll: () => doScroll() };
@@ -564,7 +618,7 @@ if (electron && electron.app) {
             const fn = actions[step.action];
             if (fn) setTimeout(fn, step.delay_ms);
         });
-        plog("Scheduled " + CFG.startupSequence.length + " startup steps");
+        logger.log("INFO", "Scheduled " + CFG.startupSequence.length + " startup steps");
     } else {
         setTimeout(switchToGuild, 6000);
         setTimeout(switchToGuild, 15000);
@@ -583,8 +637,8 @@ if (electron && electron.app) {
                 for (let i = 0; i < lines.length && ids.length < maxPosts; i++) {
                     try { const d = JSON.parse(lines[i]); if (d.id && (d.commentCount||0) > 0) ids.push(d.id); } catch(e) {}
                 }
-                if (ids.length === 0) { plog("Fetch: no posts with comments"); return; }
-                plog("Fetch: queued " + ids.length + " posts, globalBkn=" + globalBkn);
+                if (ids.length === 0) { logger.log("INFO", "Fetch: no posts with comments"); return; }
+                logger.log("INFO", "Fetch: queued " + ids.length + " posts, globalBkn=" + globalBkn);
 
                 const guildId = CFG.channelId;
                 const all = electron.webContents.getAllWebContents();
@@ -645,7 +699,7 @@ if (electron && electron.app) {
                         break;
                     } catch(e) {}
                 }
-            } catch(e) { plog("Fetch error: "+e.message); }
+            } catch(e) { logger.log("ERROR", "Fetch error: "+e.message); }
         }, startDelay);
     }
 
@@ -653,6 +707,7 @@ if (electron && electron.app) {
 
     const traversedPostIds = new Set();
     let daemonCycle = 0;
+    let lastDaemonTs = null;
 
     function findChannelWc() {
         const all = electron.webContents.getAllWebContents();
@@ -702,7 +757,7 @@ if (electron && electron.app) {
         const THRESHOLD = 20, MIN = 10, MAX = 300;
         const tick = () => {
             if ((n >= MIN && stall >= THRESHOLD) || n >= MAX) {
-                plog("Daemon scroll-down done: n="+n+" stall="+stall+" feeds="+capturedIds.size);
+                logger.log("INFO", "Daemon scroll-down done: n="+n+" stall="+stall+" feeds="+capturedIds.size);
                 if (done) done();
                 return;
             }
@@ -729,17 +784,19 @@ if (electron && electron.app) {
 
     function daemonLoop() {
         daemonCycle++;
-        if (!timelineBottomReached) { plog("Daemon #"+daemonCycle+": skip (initial scroll in progress, feeds="+capturedIds.size+")"); return; }
+        try { lock.acquire(daemonCycle); } catch(e) { logger.log("ERROR", "Lock acquire failed: " + e.message); return; }
+        if (!timelineBottomReached) { logger.log("INFO", "Daemon #"+daemonCycle+": skip (initial scroll in progress, feeds="+capturedIds.size+")"); lock.release(); return; }
         const wc = findChannelWc();
         if (!wc) {
-            plog("Daemon #"+daemonCycle+": no webContents, navigating to guild...");
+            logger.log("INFO", "Daemon #"+daemonCycle+": no webContents, navigating to guild...");
+            lock.release();
             switchToGuild();
             setTimeout(() => { clickChannel(); }, 5000);
             return;
         }
 
         if (deadMediaQueue.length > 0) {
-            plog("Daemon #"+daemonCycle+": retrying " + deadMediaQueue.length + " dead media downloads");
+            logger.log("INFO", "Daemon #"+daemonCycle+": retrying " + deadMediaQueue.length + " dead media downloads");
             for (let i = deadMediaQueue.length - 1; i >= 0; i--) {
                 const item = deadMediaQueue[i];
                 if ((item.retries||0) >= 3) {
@@ -754,7 +811,7 @@ if (electron && electron.app) {
         }
 
         daemonScrollToTop(wc);
-        plog("Daemon #"+daemonCycle+": "+capturedIds.size+" feeds, "+capturedCommentKeys.size+" comment batches, "+mediaQueue.length+" media queued, "+traversedPostIds.size+" traversed, bottom="+timelineBottomReached);
+        logger.log("INFO", "Daemon #"+daemonCycle+": "+capturedIds.size+" feeds, "+capturedCommentKeys.size+" comment batches, "+mediaQueue.length+" media queued, "+traversedPostIds.size+" traversed, bottom="+timelineBottomReached);
 
         setTimeout(() => {
             try {
@@ -767,7 +824,7 @@ if (electron && electron.app) {
                     } catch(e) {}
                 }
                 if (newIds.length > 0) {
-                    plog("Daemon: "+newIds.length+" new posts with comments");
+                    logger.log("INFO", "Daemon: "+newIds.length+" new posts with comments");
                     newIds.forEach(id => traversedPostIds.add(id));
                 }
 
@@ -777,7 +834,7 @@ if (electron && electron.app) {
                         try { const d = JSON.parse(lines[i]); if (d.id && (d.commentCount||0) > 0) recentIds.push(d.id); } catch(e) {}
                     }
                     if (recentIds.length > 0) {
-                        plog("Daemon: re-polling "+recentIds.length+" recent posts for new comments");
+                        logger.log("INFO", "Daemon: re-polling "+recentIds.length+" recent posts for new comments");
                         daemonFetchComments(wc, recentIds);
                     }
                 }
@@ -795,10 +852,12 @@ if (electron && electron.app) {
                             hashTime: new Date().toISOString()
                         };
                         fs.writeFileSync(path.join(CFG.dataDir, 'state.json'), JSON.stringify(state, null, 2));
-                        plog("State: written hash=" + hash.slice(0, 16) + " feeds=" + capturedIds.size);
-                    } catch(e) { plog("State write err: " + e.message); }
+                        lastDaemonTs = Date.now();
+                        logger.log("INFO", "State: written hash=" + hash.slice(0, 16) + " feeds=" + capturedIds.size);
+                        lock.release();
+                    } catch(e) { logger.log("ERROR", "State write err: " + e.message); try { lock.release(); } catch(e2) {} }
                 });
-            } catch(e) { plog("Daemon traverse err: "+e.message); }
+            } catch(e) { logger.log("ERROR", "Daemon traverse err: "+e.message); try { lock.release(); } catch(e2) {} }
         }, 10000);
     }
 
@@ -807,18 +866,64 @@ if (electron && electron.app) {
             try {
                 const lines = fs.readFileSync(CFG.dataDir+"/feeds.jsonl","utf8").split("\n").filter(Boolean);
                 for (const l of lines) { try { const d = JSON.parse(l); if (d.id && (d.commentCount||0) === 0) traversedPostIds.add(d.id); } catch(e) {} }
-                plog("Daemon: marked "+traversedPostIds.size+" existing posts as traversed, starting daemon (interval="+CFG.daemonInterval+"ms)");
+                logger.log("INFO", "Daemon: marked "+traversedPostIds.size+" existing posts as traversed, starting daemon (interval="+CFG.daemonInterval+"ms)");
                 let requeued = 0;
                 for (const l of lines) {
                     try { const d = JSON.parse(l); if (d.id) { const before = mediaQueue.length; queueMedia(extractMediaUrls(d), d.id); if (mediaQueue.length > before) requeued++; } } catch(e) {}
                 }
-                if (requeued > 0) plog("Daemon: requeued media from "+requeued+" feeds ("+mediaQueue.length+" queued)");
+                if (requeued > 0) logger.log("INFO", "Daemon: requeued media from "+requeued+" feeds ("+mediaQueue.length+" queued)");
                 setInterval(daemonLoop, CFG.daemonInterval);
                 setTimeout(() => daemonLoop(), 15000);
-            } catch(e) { plog("Daemon startup err: "+e.message); }
+            } catch(e) { logger.log("ERROR", "Daemon startup err: "+e.message); }
         }, 150000);
+    }
+
+    const apiServer = new ApiServer({
+        port: CFG.apiPort,
+        logger: logger,
+        lock: lock,
+        getStats: function() {
+            return {
+                feeds: capturedIds.size,
+                comments: capturedCommentKeys.size,
+                media_total: mediaSeen.size,
+                media_queued: mediaQueue.length,
+                dead_media: deadMediaQueue.length,
+                daemon_cycle: daemonCycle,
+                last_scan_ts: lastDaemonTs ? Math.floor(lastDaemonTs / 1000) : null,
+                bottom_reached: timelineBottomReached,
+                uptime_seconds: Math.floor((Date.now() - (global.__promStartTime||Date.now())) / 1000)
+            };
+        },
+        getConfig: function() {
+            var safe = {};
+            for (var k in CFG) {
+                if (typeof CFG[k] !== 'function' && k !== 'startupSequence') {
+                    safe[k] = CFG[k];
+                }
+            }
+            return safe;
+        },
+        setConfig: function(newCfg) {
+            for (var k in newCfg) {
+                if (k === 'daemonInterval') CFG.daemonInterval = newCfg[k];
+                else if (k === 'apiPort') CFG.apiPort = newCfg[k];
+                else if (k in CFG) CFG[k] = newCfg[k];
+            }
+            logger.log("INFO", "Config updated via API: " + JSON.stringify(Object.keys(newCfg)));
+        },
+        triggerDaemon: function() {
+            logger.log("INFO", "Manual daemon trigger via API");
+            daemonLoop();
+        }
+    });
+    try {
+        apiServer.start();
+        logger.log("INFO", "API server started on port " + CFG.apiPort);
+    } catch(e) {
+        logger.log("ERROR", "API server failed to start: " + e.message);
     }
 }
 
-try { require(path.join(__dirname, "..", "application.asar", "app_launcher", "index.js")); plog("QQ loaded"); }
-catch(e) { plog("QQ err: " + e.message); require(path.join(process.resourcesPath, "app", "application.asar", "app_launcher", "index.js")); }
+try { require(path.join(__dirname, "..", "application.asar", "app_launcher", "index.js")); logger.log("INFO", "QQ loaded"); }
+catch(e) { logger.log("ERROR", "QQ err: " + e.message); require(path.join(process.resourcesPath, "app", "application.asar", "app_launcher", "index.js")); }

@@ -1,6 +1,8 @@
 data/
+log/
 output/
 qq_patched/
 __pycache__/
 *.pyc
 *.log
+.sisyphus/

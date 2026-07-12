@@ -4,66 +4,115 @@
 
 ```
 prometheus/
-├── prometheus.conf.json          # 配置（单一真相源）
-├── pyproject.toml                # src layout: packages.find where=src
+├── conf/                         # 配置目录
+│   ├── prometheus.conf.json      # QQ/inject.js 配置
+│   ├── tui.conf.json             # TUI 配置
+│   └── launcher.conf.json        # Launcher 配置
+├── pyproject.toml                # src layout
 ├── requirements.txt
 ├── README.md
-├── doc/                          # 文档（本目录）
+├── doc/                          # 文档
 ├── scripts/                      # 可执行脚本
-│   ├── setup.sh                  # 一键安装（解包 AppImage + 注入）
-│   └── start_qq.sh               # 启动 patched QQ
+│   ├── setup.sh                  # 一键安装（解包 AppImage + 复制 JS 模块）
+│   ├── start_qq.sh               # 启动 patched QQ
+│   ├── start_launcher.sh         # 一键启动 launcher（推荐）
+│   └── start_tui.sh              # 单独启动 TUI
 ├── deploy/                       # 部署配置
-│   └── qq-prometheus.service     # systemd user service 模板（默认禁用）
+│   └── qq-prometheus.service     # systemd user service 模板
 ├── src/
-│   └── prometheus/               # Python 包（src layout）
-│       ├── __init__.py
-│       ├── __main__.py           # python -m prometheus 入口
-│       ├── config.py             # 配置加载器
-│       ├── _envconfig.py         # bash 环境变量发射器
-│       ├── inject.js             # 注入脚本（核心，读 env，被复制进 AppImage）
-│       ├── autoscroll.py         # ydotool 自动滚动（已弃用）
-│       ├── keyring.py            # SQLCipher 密钥提取
-│       ├── cipher.py             # SQLCipher AES-256-CBC 解密
-│       ├── feed.py               # Protobuf feed 解析
-│       ├── media.py              # 本地媒体管理
-│       ├── cli.py                # CLI 接口
-│       └── scraper.py            # CDP 刮取器（QQ 禁用 CDP，不可用）
-├── data/                         # 运行时数据（运行后生成，gitignored）
-│   ├── feeds.jsonl               # 帖子归档
-│   ├── comments.jsonl            # 评论归档
-│   ├── media_index.jsonl         # 媒体索引
-│   ├── dead_media.jsonl          # 临时失效媒体队列（重试中）
-│   ├── dead_media_permanent.jsonl # 永久失效 URL（3 次重试后放弃）
-│   ├── state.json                # 守护状态快照
-│   ├── media/                    # 下载的图片/视频
-│   ├── ids.json                  # 帖子 ID 去重表
-│   └── prometheus.log            # 运行日志
-├── qq_patched/                   # AppImage 解包结果（setup.sh 后生成，gitignored）
-└── output/                       # CLI 归档产出（archive.db / markdown / media，gitignored）
+│   ├── prometheus/               # 归档核心
+│   │   ├── inject.js             # 注入脚本（核心）
+│   │   ├── logger.js             # 日志模块
+│   │   ├── lock.js               # 崩溃安全锁模块
+│   │   ├── api-server.js         # QQ HTTP API 模块
+│   │   ├── _envconfig.py         # JSON → 环境变量转换
+│   │   └── ...                   # 其他工具模块
+│   │   └── tests/                # JS 测试
+│   ├── launcher/                 # 进程管理器
+│   │   ├── process_manager.py    # 进程生命周期 + PR_SET_PDEATHSIG
+│   │   ├── api.py                # Launcher HTTP API (127.0.0.1:9421)
+│   │   └── __main__.py           # 入口：REPL + TUI 监控
+│   └── tui/                      # textual 控制台
+│       ├── app.py                # 主应用
+│       ├── api_client.py         # HTTP 客户端
+│       ├── api.py                # API 封装
+│       └── tabs/                 # 标签页组件
+├── tests/                        # Python 测试
+│   ├── test_launcher.py
+│   ├── test_launcher_api.py
+│   ├── test_api_client.py
+│   └── test_tui_api.py
+├── data/                         # 运行时数据（gitignored）
+├── log/                          # 日志目录 (gitignored)
+│   ├── prometheus/               # inject.js 运行日志
+│   ├── launcher/                 # launcher stdout/stderr
+│   └── tui/                      # TUI 日志（预留）
+└── qq_patched/                   # AppImage 解包结果（gitignored）
 ```
 
 ## 新机器安装
 
 ```bash
-# 1. 复制整个项目目录
+# 1. 复制项目
 scp -r prometheus/ newhost:~/Projects/
 
-# 2. 下载 QQ AppImage
+# 2. 安装 Python 依赖
+pip install textual
+
+# 3. 下载 QQ AppImage
 #    https://im.qq.com/linuxqq/index.shtml
 
-# 3. 运行安装脚本（patched QQ 会解包到项目内 qq_patched/）
-#    setup.sh 保留 AppImage 原始版本号，仅修改 package.json 入口指向注入脚本。
+# 4. 运行安装脚本
 cd ~/Projects/prometheus
 bash scripts/setup.sh ~/Downloads/QQ_3.2.29_260528_x86_64_01.AppImage
 
-# 4. 启动
-bash scripts/start_qq.sh
+# 5. 启动
+bash scripts/start_launcher.sh
 ```
 
-所有产出（patched QQ、feed 归档、CLI 输出）都在项目目录内，复制/删除整个项目即可迁移/清理，不会在 `$HOME` 留下残留。
+## 进程架构
 
-> **Python 包导入**：采用 src layout，`python3 -m prometheus.*` 需要 `PYTHONPATH=src`（或 `pip install -e .`）。bash 脚本不依赖此设置——它们直接按路径调用 `_envconfig.py`。
+```
+launcher (Python)
+├── QQ (Electron)
+│   ├── start_new_session=True    独立 session
+│   ├── stdin=DEVNULL             不碰终端输入
+│   ├── stdout→logfile            输出到 log/launcher/qq.log
+│   └── PR_SET_PDEATHSIG          launcher 死 → 内核杀 QQ
+├── TUI (textual)
+│   ├── start_new_session=True    独立 session
+│   ├── TEXTUAL_DISABLE_KITTY_KEY=1  禁用 Kitty keyboard
+│   └── PR_SET_PDEATHSIG          launcher 死 → 内核杀 TUI
+└── HTTP API 127.0.0.1:9421
+```
+
+launcher 被 `kill -9` 也不会留下孤儿进程：`PR_SET_PDEATHSIG` 让内核在父进程死亡时自动给子进程发 SIGTERM。
+
+## 启动方式
+
+### 一键启动（推荐）
+
+```bash
+bash scripts/start_launcher.sh
+# launcher 自动启动 QQ + TUI
+# TUI 退出后进入 launcher REPL
+# REPL 中 q 退出（会杀 QQ）
+```
+
+### 单独启动 QQ
+
+```bash
+bash scripts/start_qq.sh
+# 直接启动 QQ，无 TUI
+```
+
+### 单独启动 TUI
+
+```bash
+bash scripts/start_tui.sh --port 9421
+# 仅 TUI，需要 launcher 已在运行
+```
 
 ## systemd 部署
 
-`deploy/qq-prometheus.service` 提供了 systemd user service 模板（默认禁用）。可根据需要启用以实现开机自动启动。
+`deploy/qq-prometheus.service` 提供了 systemd user service 模板。可根据需要启用以实现开机自动启动。

@@ -411,7 +411,11 @@ if (electron && electron.app) {
             }
             else if (msg.startsWith('[P]')) { try { saveFeed(JSON.parse(msg.substring(3))); } catch(err) {} }
             else if (msg.startsWith('[Prometheus]')) logger.log("INFO", "R: "+msg);
-            else if (lvl > 2) logger.log("ERROR", "E: "+msg.slice(0,200));
+            else if (lvl > 2) {
+                // Filter known QQ renderer noise to DEBUG; real errors stay ERROR
+                const noise = /UnitedConfigService|ResizeObserver loop|AioTimestampService|Failed to parse feed\.json_feed/;
+                logger.log(noise.test(msg) ? "DEBUG" : "ERROR", "E: " + msg.slice(0, 200));
+            }
         });
     });
 

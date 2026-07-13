@@ -25,9 +25,6 @@ def main():
 
     pm = ProcessManager(config)
     pm.install_signal_handlers()
-    pm.start_qq()
-    if config.get("start_tui", True):
-        pm.start_tui()
 
     restart_delay = config.get("restart_delay", 5)
     while True:

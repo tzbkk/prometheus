@@ -20,13 +20,13 @@ from textual.widgets import (
     Static,
 )
 
+from src.prometheus import __version__ as _APP_VERSION
 from src.tui.api import PrometheusApiClient
 from src.tui.tabs.base import BaseTab
 
 # parents[3]: src/tui/tabs/tui_tab.py → src/tui/tabs → src/tui → src → root
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 _CONF_DIR: Path = _PROJECT_ROOT / "conf"
-_TUI_VERSION: str = "0.1.1"
 
 
 def _scan_conf_files() -> list[str]:
@@ -346,7 +346,7 @@ class TuiTab(BaseTab):
             pass
 
         lines = [
-            f"prometheus-tui v{_TUI_VERSION}",
+            f"prometheus-tui v{_APP_VERSION}",
             f"textual v{textual.__version__}",
             f"API Version: {api_version}",
             f"Project: {_PROJECT_ROOT}",

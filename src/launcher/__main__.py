@@ -66,9 +66,6 @@ def main():
     sys.stderr = open(err_log, "a")
 
     pm = ProcessManager(config)
-    if config.get("start_tui", True):
-        pm.start_tui()
-    pm.start_qq()
 
     api = LauncherApi(pm, port=config.get("launcher_port", 9421))
     api_thread = threading.Thread(target=api.serve_forever, daemon=True)
@@ -85,7 +82,7 @@ def main():
     _wait_for_tui(pm)
 
     print("\n=== Prometheus Launcher ===")
-    print("  [Enter]=status  s=start TUI  p=stop QQ  r=restart  q=quit  h=help\n")
+    print("  [Enter]=status  s=start TUI  p=stop QQ  r=start all  q=quit  h=help\n")
     while True:
         try:
             cmd = input("> ").strip().lower()
@@ -114,7 +111,7 @@ def main():
         elif cmd in ("a", "status"):
             _print_status(pm)
         elif cmd in ("h", "help"):
-            print("  [Enter]=status  s=start TUI  p=stop QQ  r=restart  q=quit  h=help")
+            print("  [Enter]=status  s=start TUI  p=stop QQ  r=start all  q=quit  h=help")
 
 
 if __name__ == "__main__":

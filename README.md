@@ -22,8 +22,9 @@
 
 # 1. 一键安装（从 AppImage 构建 patched QQ，复制 4 个 JS 模块到 qq_patched/）
 bash scripts/setup.sh ~/Downloads/QQ_3.2.29_260528_x86_64_01.AppImage
+#    更新 JS 或升级 QQ 时：rm -rf qq_patched && bash scripts/setup.sh ~/Downloads/QQ_*.AppImage
 
-# 2. 启动（launcher 自动管理 QQ + TUI）
+# 2. 启动（launcher 启动 API + REPL，不自动启动 QQ/TUI）
 bash scripts/start_launcher.sh
 
 # 3. 首次启动需手机扫码登录 QQ（仅一次）
@@ -35,8 +36,8 @@ bash scripts/start_launcher.sh
 #    TUI 标签页：配置编辑、关于、帮助
 #    q 键随时退出 TUI → 回到 launcher REPL
 
-# 5. launcher REPL（TUI 退出后）
-#    [Enter]=status  s=start TUI  p=stop QQ  r=restart  q=quit
+# 5. launcher REPL（TUI 退出后或 launcher 直接启动后）
+#    [Enter]=status  s=start TUI  p=stop QQ  r=start all  q=quit
 
 # 6. 监控进度（不开 TUI 时）
 tail -f log/prometheus/prometheus.log

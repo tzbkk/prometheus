@@ -55,7 +55,6 @@ class ProcessManager:
             [sys.executable, "-m", "src.tui", "--port", port],
             cwd=self.project_root,
             env=env,
-            start_new_session=True,
             preexec_fn=_set_pdeathsig,
         )
 

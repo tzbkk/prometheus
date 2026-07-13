@@ -121,7 +121,7 @@ GNOME Mutter / Wayland 在窗口遮挡时不发送 `wl_surface.frame` 回调 →
 
 Python 标准库进程管理器（`src/launcher/`），零额外依赖：
 
-- **进程隔离**：QQ 和 TUI 各自 `start_new_session=True`（独立 session），QQ 的 `stdin=DEVNULL` + `stdout=logfile`（不碰终端）
+- **进程隔离**：QQ 使用 `start_new_session=True`（独立 session，`stdin=DEVNULL` + `stdout=logfile` 不碰终端）；TUI 与 launcher 共享 session（接收 SIGWINCH 以支持终端 resize）
 - **PR_SET_PDEATHSIG**：子进程 fork 后调 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，launcher 死了（含 `kill -9`）内核自动杀子进程
 - **TUI 独占终端**：launcher 主线程 `proc.wait()` 阻塞等待 TUI 退出，不碰 stdin
 - **终端恢复**：TUI 退出后 → `reset`（不捕获输出，让转义序列到终端）→ `tcflush(TCIFLUSH)` 清残留输入

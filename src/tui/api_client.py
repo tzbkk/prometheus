@@ -89,3 +89,15 @@ class ApiClient:
     def launcher_shutdown(self):
         """POST /shutdown → returns data dict"""
         return self._request('POST', self.host, self.launcher_port, '/shutdown')
+
+    def webapp_start(self):
+        """POST /webapp/start → returns data dict"""
+        return self._request('POST', self.host, self.launcher_port, '/webapp/start')
+
+    def webapp_stop(self):
+        """POST /webapp/stop → returns data dict"""
+        return self._request('POST', self.host, self.launcher_port, '/webapp/stop')
+
+    def webapp_status(self):
+        """GET /webapp/status → returns data dict"""
+        return self._request('GET', self.host, self.launcher_port, '/webapp/status')

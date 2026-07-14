@@ -62,3 +62,12 @@ class LauncherApiClient:
 
     def shutdown(self) -> dict:
         return self.client.launcher_shutdown()
+
+    def start_viewer(self) -> dict:
+        return self.client.webapp_start()
+
+    def stop_viewer(self) -> dict:
+        return self.client.webapp_stop()
+
+    def viewer_status(self) -> dict:
+        return self.client.webapp_status()

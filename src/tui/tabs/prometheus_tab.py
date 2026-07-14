@@ -176,7 +176,7 @@ class PrometheusTab(BaseTab):
         with Vertical(id="left-panel"):
             yield Static("○ DISCONNECTED", id="process-status")
             yield Static(
-                "[S]tart  [K]ill  [R]estart  [T]rigger  [Q]uit",
+                "[S]tart  [K]ill  [R]estart  [T]rigger  [V]iewer  [Q]uit",
                 id="controls-hint",
                 markup=False,
             )
@@ -256,6 +256,9 @@ class PrometheusTab(BaseTab):
         elif key == "t":
             event.prevent_default()
             self.action_trigger_daemon()
+        elif key == "v":
+            event.prevent_default()
+            self.action_toggle_viewer()
         elif key == "up":
             event.prevent_default()
             self._pause_auto_scroll()
@@ -528,6 +531,26 @@ class PrometheusTab(BaseTab):
             self.app.notify(f"Trigger failed: {exc}", severity="error")
             return
         self.app.notify("Daemon triggered", severity="information")
+
+    @work(exclusive=False, thread=True)
+    def action_toggle_viewer(self) -> None:
+        if self.launcher_client is None:
+            return
+        try:
+            status = self.launcher_client.viewer_status()
+        except Exception as exc:
+            self.app.call_from_thread(self.app.notify, f"Viewer status failed: {exc}", severity="error")
+            return
+        state = status.get("viewer", "stopped") if isinstance(status, dict) else "stopped"
+        try:
+            if state == "running":
+                self.launcher_client.stop_viewer()
+                self.app.call_from_thread(self.app.notify, "Viewer stopped", severity="information")
+            else:
+                self.launcher_client.start_viewer()
+                self.app.call_from_thread(self.app.notify, "Viewer started at http://127.0.0.1:9422", severity="information")
+        except Exception as exc:
+            self.app.call_from_thread(self.app.notify, f"Viewer toggle failed: {exc}", severity="error")
 
     def _append_logs(self, logs_data: dict) -> None:
         lines = logs_data.get("logs")

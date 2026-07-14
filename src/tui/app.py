@@ -13,6 +13,7 @@ from src.tui.api_client import ApiClient
 from src.tui.tabs.base import BaseTab
 from src.tui.tabs.prometheus_tab import PrometheusTab
 from src.tui.tabs.tui_tab import TuiTab
+from src.tui.tabs.viewer_tab import ViewerTab
 
 # parents[2]: src/tui/app.py → src/tui → src → root
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -65,7 +66,7 @@ class PrometheusApp(App):
     }
     """
 
-    TABS: list[type[BaseTab]] = [PrometheusTab, TuiTab]
+    TABS: list[type[BaseTab]] = [PrometheusTab, ViewerTab, TuiTab]
 
     bindings = [
         ("q", "quit", "Quit"),

@@ -161,3 +161,74 @@ Python 标准库进程管理器（`src/launcher/`），零额外依赖：
 - 评论 API（`GetFeedComments`）已被 QQ 服务端废弃，返回空
 - wrapper.node 由 C++ dlopen 加载，不经过 require → JS 层无法 hook
 - 正常 QQ 与 patched QQ 共享 `~/.config/QQ/` → 版本冲突
+
+## Viewer — Web 归档浏览器
+
+Viewer 是 launcher 管理的第三个子进程，提供 Web 界面浏览已归档的帖子。
+
+### 架构
+
+```
+Viewer (Python HTTP, 127.0.0.1:9422)
+├── API (server.py → api.py)
+│   ├── GET  /api/feeds?page=&size=      分页列表（含首张图片）
+│   ├── GET  /api/feed/:id               帖子详情（原图 URL 匹配、过滤缩略图变体）
+│   ├── GET  /api/search?q=&page=        全文检索（LIKE 匹配 title_text + raw_json）
+│   ├── GET  /api/stats                  feed/media 数量 + DB 大小
+│   └── POST /api/rebuild                手动增量索引
+├── 媒体服务 (server.py)
+│   ├── GET  /media/:filename            原图/视频（Range 支持，206 Partial Content）
+│   └── 路径遍历防护、流式传输
+├── 静态文件 (server.py)
+│   └── React SPA → src/viewer/static/index.html
+├── SQLite (db/viewer.db)
+│   ├── feeds      帖子全文 + 作者 + 统计
+│   ├── feeds_fts  FTS5 全文索引（已弃用，搜索改用 LIKE）
+│   ├── media      媒体文件映射（url → local file）
+│   └── meta       last_offset / indexed_at
+├── 索引器 (indexer.py)
+│   ├── build_all()              全量重建
+│   ├── build_incremental()      增量追加（last_offset 跟踪）
+│   └── 启动时自动跑一次增量 + 后台轮询（poll_interval=30s）
+└── 前端 (React + Vite + Tailwind + React Query)
+    ├── /               FeedListPage（无限滚动、30s 自动刷新）
+    ├── /feed/:id       FeedDetailPage（图片灯箱、视频播放）
+    └── /search?q=      SearchPage（复用 FeedCard）
+```
+
+### API 端口
+
+| 端口 | 服务 | 说明 |
+|------|------|------|
+| 9420 | QQ HTTP API | inject.js 内嵌 |
+| 9421 | Launcher HTTP API | 进程管理 |
+| 9422 | Viewer HTTP API | Web 归档浏览器 |
+
+### 配置
+
+`conf/viewer.conf.json`：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| port | 9422 | 监听端口 |
+| db_path | db/viewer.db | SQLite 路径 |
+| data_dir | data | 数据目录（feeds.jsonl, media/） |
+| static_dir | src/viewer/static | React 构建产物 |
+| poll_interval | 30 | 增量索引间隔（秒，0=禁用） |
+| page_size | 20 | 每页帖子数 |
+
+### 控制方式
+
+| 方式 | 操作 | 说明 |
+|------|------|------|
+| launcher REPL | `v` | 启动/停止 Viewer |
+| TUI Viewer 标签页 | `v` | 开关 Viewer |
+| launcher API | `POST /webapp/start` | 启动 |
+| launcher API | `POST /webapp/stop` | 停止 |
+| launcher API | `GET /webapp/status` | 查询状态 |
+
+### 设计决策
+
+- **LIKE 代替 FTS5**：FTS5 unicode61 不分词 CJK，中文子串搜索（如"高木"）无结果。LIKE 在 8745 条规模上性能足够。
+- **缩略图过滤**：QQ 每张图有 `picUrl`（原图）+ `vecImageUrl[]`（3-4 级缩略图）。详情 API 仅返回匹配 `images[].picUrl` 的本地文件。
+- **头像过滤**：作者头像 URL（`qlogo.cn`）被媒体下载器捕获，feed 列表缩略图和详情媒体列表均过滤排除。

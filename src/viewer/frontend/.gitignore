@@ -1,4 +1,5 @@
-# Logs
+# TypeScript incremental build cache
+*.tsbuildinfo
 logs
 *.log
 npm-debug.log*

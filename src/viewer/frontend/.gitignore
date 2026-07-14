@@ -1,3 +1,6 @@
+# Vite dev cache
+.vite/
+
 # TypeScript incremental build cache
 *.tsbuildinfo
 logs

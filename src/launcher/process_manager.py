@@ -20,9 +20,11 @@ def _set_pdeathsig():
 
 _QQ_STOP_TIMEOUT = 10
 _TUI_STOP_TIMEOUT = 5
+_VIEWER_STOP_TIMEOUT = 5
 _HEALTH_POLL_INTERVAL = 1
 _DEFAULT_API_PORT = 9420
 _DEFAULT_LAUNCHER_PORT = 9421
+_DEFAULT_VIEWER_PORT = 9422
 _DEFAULT_MAX_RESTARTS = 5
 _DEFAULT_QQ_SCRIPT = "scripts/start_qq.sh"
 
@@ -31,7 +33,7 @@ class ProcessManager:
     def __init__(self, config):
         self.config = config
         self.processes = {}
-        self.restart_counts = {"qq": 0, "tui": 0}
+        self.restart_counts = {"qq": 0, "tui": 0, "viewer": 0}
         self.project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
@@ -58,11 +60,29 @@ class ProcessManager:
             preexec_fn=_set_pdeathsig,
         )
 
+    def start_viewer(self):
+        port = str(self.config.get("viewer_port", _DEFAULT_VIEWER_PORT))
+        env = dict(os.environ)
+        log_dir = os.path.join(self.project_root, "log", "viewer")
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = open(os.path.join(log_dir, "viewer.log"), "a")
+        self.processes["viewer"] = subprocess.Popen(
+            [sys.executable, "-m", "src.viewer.backend.server", "--port", port],
+            cwd=self.project_root,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            preexec_fn=_set_pdeathsig,
+        )
+
     def stop_qq(self):
         self._stop("qq", _QQ_STOP_TIMEOUT)
 
     def stop_tui(self):
         self._stop("tui", _TUI_STOP_TIMEOUT)
+
+    def stop_viewer(self):
+        self._stop("viewer", _VIEWER_STOP_TIMEOUT)
 
     def _stop(self, name, timeout):
         proc = self.processes.get(name)
@@ -114,10 +134,13 @@ class ProcessManager:
         elif name == "tui":
             self.stop_tui()
             self.start_tui()
+        elif name == "viewer":
+            self.stop_viewer()
+            self.start_viewer()
         return True
 
     def monitor(self):
-        for name in ("qq", "tui"):
+        for name in ("qq", "tui", "viewer"):
             proc = self.processes.get(name)
             if proc is None:
                 continue
@@ -128,12 +151,14 @@ class ProcessManager:
     def graceful_shutdown(self):
         self.stop_qq()
         self.stop_tui()
+        self.stop_viewer()
 
     def get_status(self):
         qq_proc = self.processes.get("qq")
         return {
             "qq": self._proc_status("qq", allow_crashed=True),
             "tui": self._proc_status("tui", allow_crashed=False),
+            "viewer": self._proc_status("viewer", allow_crashed=True),
             "restart_counts": dict(self.restart_counts),
             "qq_pid": qq_proc.pid if qq_proc else None,
         }

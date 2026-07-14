@@ -56,6 +56,8 @@ class LauncherApi:
                 if self.path == "/status":
                     status = outer.pm.get_status()
                     self._ok(status)
+                elif self.path == "/webapp/status":
+                    self._handle_webapp_status()
                 else:
                     self._fail("not found", status_code=404)
 
@@ -69,6 +71,10 @@ class LauncherApi:
                     self._handle_restart()
                 elif path == "/shutdown":
                     self._handle_shutdown()
+                elif path == "/webapp/start":
+                    self._handle_webapp_start()
+                elif path == "/webapp/stop":
+                    self._handle_webapp_stop()
                 else:
                     self._fail("not found", status_code=404)
 
@@ -108,6 +114,24 @@ class LauncherApi:
                 outer.pm.graceful_shutdown()
                 self._send(200, {"ok": True, "data": {}, "error": ""})
                 threading.Thread(target=outer.stop, daemon=True).start()
+
+            def _handle_webapp_start(self):
+                self._read_body()
+                status = outer.pm.get_status()
+                if status.get("viewer") == "running":
+                    self._ok({"viewer": "already running"})
+                    return
+                outer.pm.start_viewer()
+                self._ok({"viewer": "started"})
+
+            def _handle_webapp_stop(self):
+                self._read_body()
+                outer.pm.stop_viewer()
+                self._ok({"viewer": "stopped"})
+
+            def _handle_webapp_status(self):
+                status = outer.pm.get_status()
+                self._ok({"viewer": status.get("viewer", "stopped")})
 
         self._handler_cls = Handler
 

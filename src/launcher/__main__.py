@@ -20,8 +20,9 @@ def _load_config():
 
 def _print_status(pm):
     s = pm.get_status()
-    print(f"  QQ:  {s['qq']:10s}  restart #{s['restart_counts']['qq']}")
-    print(f"  TUI: {s['tui']:10s}  restart #{s['restart_counts']['tui']}")
+    print(f"  QQ:     {s['qq']:10s}  restart #{s['restart_counts']['qq']}")
+    print(f"  TUI:    {s['tui']:10s}  restart #{s['restart_counts']['tui']}")
+    print(f"  Viewer: {s['viewer']:10s}  restart #{s['restart_counts']['viewer']}")
 
 
 def _restore_terminal():
@@ -82,7 +83,7 @@ def main():
     _wait_for_tui(pm)
 
     print("\n=== Prometheus Launcher ===")
-    print("  [Enter]=status  s=start TUI  p=stop QQ  r=start all  q=quit  h=help\n")
+    print("  [Enter]=status  s=TUI  v=viewer  p=stop QQ  r=start all  q=quit  h=help\n")
     while True:
         try:
             cmd = input("> ").strip().lower()
@@ -99,6 +100,10 @@ def main():
             pm.start_tui()
             _wait_for_tui(pm)
             print()
+        elif cmd in ("v", "viewer"):
+            pm.start_viewer()
+            viewer_port = config.get("viewer_port", 9422)
+            print("Viewer started at http://127.0.0.1:{0}".format(viewer_port))
         elif cmd in ("p", "stop"):
             pm.stop_qq()
             print("QQ stopped")
@@ -111,7 +116,7 @@ def main():
         elif cmd in ("a", "status"):
             _print_status(pm)
         elif cmd in ("h", "help"):
-            print("  [Enter]=status  s=start TUI  p=stop QQ  r=start all  q=quit  h=help")
+            print("  [Enter]=status  s=TUI  v=viewer  p=stop QQ  r=start all  q=quit  h=help")
 
 
 if __name__ == "__main__":

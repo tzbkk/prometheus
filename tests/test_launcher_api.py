@@ -32,7 +32,8 @@ def _make_pm():
     pm.get_status.return_value = {
         "qq": "stopped",
         "tui": "stopped",
-        "restart_counts": {"qq": 0, "tui": 0},
+        "viewer": "stopped",
+        "restart_counts": {"qq": 0, "tui": 0, "viewer": 0},
     }
     return pm
 
@@ -339,6 +340,128 @@ class TestLoggingSuppressed(unittest.TestCase):
         try:
             handler_cls = api._handler_cls
             self.assertTrue(hasattr(handler_cls, "log_message"))
+        finally:
+            api.stop()
+
+
+class TestPostWebappStart(unittest.TestCase):
+    """POST /webapp/start calls pm.start_viewer."""
+
+    def test_start_calls_start_viewer(self):
+        pm = _make_pm()
+        api, base, pm = _start_server(pm)
+        try:
+            status, body = _request(base, "/webapp/start", method="POST", body={})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["data"], {"viewer": "started"})
+            self.assertEqual(body["error"], "")
+            pm.start_viewer.assert_called_once_with()
+        finally:
+            api.stop()
+
+    def test_start_idempotent_if_already_running(self):
+        pm = _make_pm()
+        pm.get_status.return_value = {
+            "qq": "stopped",
+            "tui": "stopped",
+            "viewer": "running",
+            "restart_counts": {"qq": 0, "tui": 0, "viewer": 0},
+        }
+        api, base, pm = _start_server(pm)
+        try:
+            status, body = _request(base, "/webapp/start", method="POST", body={})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["data"], {"viewer": "already running"})
+            pm.start_viewer.assert_not_called()
+        finally:
+            api.stop()
+
+    def test_start_accepts_empty_body(self):
+        pm = _make_pm()
+        api, base, pm = _start_server(pm)
+        try:
+            status, body = _request(base, "/webapp/start", method="POST", body={})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+        finally:
+            api.stop()
+
+
+class TestPostWebappStop(unittest.TestCase):
+    """POST /webapp/stop calls pm.stop_viewer."""
+
+    def test_stop_calls_stop_viewer(self):
+        pm = _make_pm()
+        api, base, pm = _start_server(pm)
+        try:
+            status, body = _request(base, "/webapp/stop", method="POST", body={})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["data"], {"viewer": "stopped"})
+            self.assertEqual(body["error"], "")
+            pm.stop_viewer.assert_called_once_with()
+        finally:
+            api.stop()
+
+    def test_stop_does_not_touch_qq_or_tui(self):
+        pm = _make_pm()
+        api, base, pm = _start_server(pm)
+        try:
+            status, body = _request(base, "/webapp/stop", method="POST", body={})
+            self.assertEqual(status, 200)
+            pm.stop_qq.assert_not_called()
+            pm.stop_tui.assert_not_called()
+        finally:
+            api.stop()
+
+
+class TestGetWebappStatus(unittest.TestCase):
+    """GET /webapp/status returns viewer status from pm.get_status."""
+
+    def test_status_returns_viewer_running(self):
+        pm = _make_pm()
+        pm.get_status.return_value = {
+            "qq": "running",
+            "tui": "running",
+            "viewer": "running",
+            "restart_counts": {"qq": 0, "tui": 0, "viewer": 1},
+        }
+        api, base, pm = _start_server(pm)
+        try:
+            status, body = _request(base, "/webapp/status")
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["data"], {"viewer": "running"})
+            self.assertEqual(body["error"], "")
+            pm.get_status.assert_called_once_with()
+        finally:
+            api.stop()
+
+    def test_status_returns_viewer_stopped(self):
+        pm = _make_pm()
+        api, base, pm = _start_server(pm)
+        try:
+            status, body = _request(base, "/webapp/status")
+            self.assertEqual(status, 200)
+            self.assertEqual(body["data"], {"viewer": "stopped"})
+        finally:
+            api.stop()
+
+    def test_status_returns_viewer_crashed(self):
+        pm = _make_pm()
+        pm.get_status.return_value = {
+            "qq": "running",
+            "tui": "stopped",
+            "viewer": "crashed",
+            "restart_counts": {"qq": 0, "tui": 0, "viewer": 2},
+        }
+        api, base, pm = _start_server(pm)
+        try:
+            status, body = _request(base, "/webapp/status")
+            self.assertEqual(status, 200)
+            self.assertEqual(body["data"], {"viewer": "crashed"})
         finally:
             api.stop()
 

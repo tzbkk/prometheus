@@ -1,0 +1,24 @@
+import { useInfiniteQuery } from '@tanstack/react-query'
+import { DEFAULT_PAGE_SIZE, searchFeeds, type Feed } from '@/lib/api'
+
+/**
+ * Infinite paginated search. The query key embeds the trimmed query so a new
+ * search resets the cache; disabled when the query is empty to avoid firing
+ * an empty-q request.
+ */
+export function useSearch(query: string, size = DEFAULT_PAGE_SIZE) {
+  const trimmed = query.trim()
+  return useInfiniteQuery({
+    queryKey: ['search', trimmed],
+    queryFn: ({ pageParam }) => searchFeeds(trimmed, pageParam, size),
+    initialPageParam: 1,
+    enabled: trimmed.length > 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length === size ? allPages.length + 1 : undefined,
+  })
+}
+
+/** Flattened search-result list across all loaded pages. */
+export function flattenSearchResults(pages: Feed[][] | undefined): Feed[] {
+  return pages?.flat() ?? []
+}

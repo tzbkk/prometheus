@@ -1,0 +1,1 @@
+"""Prometheus viewer package."""

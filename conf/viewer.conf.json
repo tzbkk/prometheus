@@ -1,0 +1,8 @@
+{
+  "port": 9422,
+  "db_path": "db/viewer.db",
+  "data_dir": "data",
+  "static_dir": "src/viewer/static",
+  "poll_interval": 30,
+  "page_size": 20
+}

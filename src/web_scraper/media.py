@@ -17,6 +17,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from src.web_scraper.urlnorm import normalize_media_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +47,7 @@ class MediaDownloader:
                     entry = json.loads(line)
                     url = entry.get("url")
                     if url:
-                        self._seen.add(url)
+                        self._seen.add(normalize_media_url(url))
                 except (json.JSONDecodeError, TypeError):
                     pass
             logger.info("Loaded %d media entries from index", len(self._seen))
@@ -107,24 +109,25 @@ class MediaDownloader:
     def _download_one(self, url: str, media_type: str, source_id: str) -> bool:
         """Download a single URL to the media dir with retry.
 
-        Files are named ``SHA256(url)[:16]``. Existing files are skipped.
-        On failure, retries up to 3 times. Each successful download appends
-        an entry to ``media_index.jsonl``.
+        Files are named ``SHA256(normalized_url)[:16]``. Existing files are
+        skipped.  On failure, retries up to 3 times. Each successful download
+        appends an entry to ``media_index.jsonl``.
 
         Args:
-            url: CDN URL to download.
+            url: CDN URL to download (with auth params).
             media_type: ``"image"`` or ``"video"``.
             source_id: Originating feed ID (for index traceability).
 
         Returns:
             True if the file is present on disk after this call, else False.
         """
-        filename = hashlib.sha256(url.encode()).hexdigest()[:16] + self._guess_ext(url, media_type)
+        norm_url = normalize_media_url(url)
+        filename = hashlib.sha256(norm_url.encode()).hexdigest()[:16] + self._guess_ext(url, media_type)
         filepath = self.media_dir / filename
 
         if filepath.exists() and filepath.stat().st_size > 0:
             return 0
-        if url in self._dead:
+        if norm_url in self._dead:
             return 0
 
         last_err: Exception | None = None
@@ -140,10 +143,10 @@ class MediaDownloader:
                 tmp.write_bytes(data)
                 os.replace(tmp, filepath)
                 with self._lock:
-                    self._seen.add(url)
+                    self._seen.add(norm_url)
                 self._append_index(
                     {
-                        "url": url,
+                        "url": norm_url,
                         "file": filename,
                         "source": source_id,
                         "type": media_type,
@@ -162,10 +165,10 @@ class MediaDownloader:
 
         logger.error("media download failed after 3 attempts: %s (%s)", url, last_err)
         with self._lock:
-            if url not in self._dead:
-                self._dead.add(url)
+            if norm_url not in self._dead:
+                self._dead.add(norm_url)
                 with open(self._dead_path, mode="a", encoding="utf-8") as f:
-                    f.write(json.dumps({"url": url}) + "\n")
+                    f.write(json.dumps({"url": norm_url}) + "\n")
                     f.flush()
         return 0
 

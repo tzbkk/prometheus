@@ -119,20 +119,21 @@ GNOME Mutter / Wayland 在窗口遮挡时不发送 `wl_surface.frame` 回调 →
 
 ## Launcher
 
-Python 标准库进程管理器（`src/launcher/`），零额外依赖：
+Python 标准库进程管理器（`src/launcher/`），依赖 prompt_toolkit 提供交互 shell：
 
 - **进程隔离**：QQ 使用 `start_new_session=True`（独立 session，`stdin=DEVNULL` + `stdout=logfile` 不碰终端）；TUI 与 launcher 共享 session（接收 SIGWINCH 以支持终端 resize）
 - **PR_SET_PDEATHSIG**：子进程 fork 后调 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，launcher 死了（含 `kill -9`）内核自动杀子进程
-- **TUI 独占终端**：launcher 主线程 `proc.wait()` 阻塞等待 TUI 退出，不碰 stdin
-- **终端恢复**：TUI 退出后 → `reset`（不捕获输出，让转义序列到终端）→ `tcflush(TCIFLUSH)` 清残留输入
-- **REPL**：`input("> ")` 标准行缓冲，有回显和 readline 支持
+- **后台 monitor 线程**：每秒调 `pm.monitor()` 检测进程崩溃并自动重启（`max_restarts=5`）；TUI 干净退出（rc=0）不触发重启
+- **TUI 独占终端**：shell 主线程 `proc.wait()` 阻塞等待 TUI 退出，不碰 stdin
+- **终端恢复**：TUI 退出后 → `reset` → `tcflush(TCIFLUSH)` 清残留输入
+- **子命令 shell**：`prompt_toolkit` PromptSession + WordCompleter + bottom_toolbar 实时状态栏；CommandParser 纯函数解析，Dispatcher 加锁调用 ProcessManager
 
 ## TUI 控制台
 
 基于 textual 框架（`src/tui/`），`TEXTUAL_DISABLE_KITTY_KEY=1` 禁用 Kitty keyboard protocol（避免退出时转义序列泄漏到 stdin）：
 
 - **两个标签页**：Prometheus（状态/控制/日志/配置/倒计时）+ TUI（设置/帮助）
-- **退出机制**：`action_quit()` 调 `driver.stop_application_mode()`（textual 自己的终端恢复）→ `os._exit(0)`（不等 event loop / worker 线程）
+- **退出机制**：`on_key` 拦截 'q' 调 `self.exit()`（textual 正常退出流程，自动恢复终端）
 - **DISCONNECTED 横幅**：QQ API 不可用时显示，恢复后自动消失
 - **PID 变化检测**：QQ restart 后 `_last_log_seq` 重置为 0，确保新日志能显示
 - **@work(thread=True)**：kill/restart HTTP 操作在后台线程，不阻塞事件循环
@@ -221,7 +222,7 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 
 | 方式 | 操作 | 说明 |
 |------|------|------|
-| launcher REPL | `v` | 启动/停止 Viewer |
+| launcher shell | `start viewer` / `stop viewer` | 启动/停止 Viewer |
 | TUI Viewer 标签页 | `v` | 开关 Viewer |
 | launcher API | `POST /webapp/start` | 启动 |
 | launcher API | `POST /webapp/stop` | 停止 |

@@ -12,7 +12,7 @@
 | QQ AppImage (Linux) | 从 [im.qq.com/linuxqq](https://im.qq.com/linuxqq/index.shtml) 下载 AppImage（已验证 v3.2.29）|
 | 正常 QQ 不能同时运行 | patched QQ 与正常 QQ 共享 `~/.config/QQ/` → 版本冲突崩溃 |
 | Python ≥ 3.8 | `start_qq.sh` 通过 `_envconfig.py` 把 JSON 配置转环境变量 |
-| textual | `pip install textual`（TUI 框架，唯一额外依赖） |
+| textual + prompt_toolkit | `pip install textual prompt_toolkit`（TUI 框架 + launcher shell） |
 | Node.js + npm | Viewer 前端构建需要（`setup.sh --target=viewer`） |
 | 首次 QQ 登录 | 启动后需手机扫码登录；session 持久化在 `~/.config/QQ/`，后续重启免登录 |
 
@@ -32,23 +32,30 @@ bash scripts/setup.sh ~/Downloads/QQ_3.2.29_260528_x86_64_01.AppImage
 # 1a. 构建 Viewer 前端（需要 Node.js）
 bash scripts/setup.sh --target=viewer
 
-# 2. 启动（launcher 启动 API + REPL，不自动启动 QQ/TUI/Viewer）
+# 2. 启动（launcher 启动 API + 交互 shell，不自动启动 QQ/TUI/Viewer）
 bash scripts/start_launcher.sh
 
 # 3. 首次启动需手机扫码登录 QQ（仅一次）
 
-# 4. TUI 操作
-#    Prometheus 标签页：
-#      [S]tart QQ   [K]ill QQ   [R]estart   [T]rigger daemon   [V]iewer   [Q]uit
-#      Ctrl+S 保存配置    ↑↓ 暂停/恢复日志滚动
-#    Viewer 标签页：
-#      [V] 启动/停止 Viewer    Ctrl+S 保存 Viewer 配置
-#      查看状态、统计、配置编辑
-#    TUI 标签页：配置编辑、关于、帮助
-#    q 键随时退出 TUI → 回到 launcher REPL
+# 4. launcher shell 子命令（docker 风格，Tab 补全）
+#    start qq|tui|viewer   启动进程
+#    stop qq|tui|viewer     停止进程
+#    restart qq|tui|viewer  重启进程
+#    status                 查看进程状态
+#    logs qq|tui|viewer     实时查看日志（Ctrl+C 停止）
+#    config show            查看配置
+#    config set <key> <val> 修改配置（原子写入）
+#    health                 检查 QQ API 健康
+#    tail feeds             查看最近归档
+#    tail stats             归档统计
+#    help                   帮助
+#    quit                   退出（优雅关闭全部子进程）
+#    底部状态栏实时显示 QQ/TUI/Viewer 状态
 
-# 5. launcher REPL（TUI 退出后或 launcher 直接启动后）
-#    [Enter]=status  s=TUI  v=viewer  p=stop QQ  r=start all  q=quit
+# 5. TUI 操作（start tui 启动后，按 q 退出回 shell）
+#    Prometheus 标签页：[S]tart [K]ill [R]estart [T]rigger [V]iewer [Q]uit
+#    Viewer 标签页：[V] 切换 Viewer    Ctrl+S 保存配置
+#    TUI 标签页：配置编辑
 
 # 6. Web Viewer
 #    浏览器打开 http://127.0.0.1:9422/
@@ -61,9 +68,9 @@ tail -f log/prometheus/prometheus.log
 ## 停止
 
 ```bash
-# 方式 1：在 TUI 中按 q → 回到 launcher REPL → 再按 q
-# 方式 2：在 launcher REPL 中按 q
-# 方式 3：Ctrl+C 发送 SIGINT → launcher 优雅关闭 QQ + TUI
+# 方式 1：在 TUI 中按 q → 回到 launcher shell → 输入 quit
+# 方式 2：在 launcher shell 中输入 quit
+# 方式 3：Ctrl+C 发送 SIGINT → launcher 优雅关闭 QQ + TUI + Viewer
 # 方式 4（强制）：kill launcher 进程 → PR_SET_PDEATHSIG 自动杀 QQ + TUI + Viewer
 ```
 

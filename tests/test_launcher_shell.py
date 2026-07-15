@@ -34,7 +34,8 @@ def _stopped_status():
         "qq": "stopped",
         "tui": "stopped",
         "viewer": "stopped",
-        "restart_counts": {"qq": 0, "tui": 0, "viewer": 0},
+        "scraper": "stopped",
+        "restart_counts": {"qq": 0, "tui": 0, "viewer": 0, "scraper": 0},
         "qq_pid": None,
     }
 
@@ -44,7 +45,8 @@ def _running_status():
         "qq": "running",
         "tui": "running",
         "viewer": "running",
-        "restart_counts": {"qq": 0, "tui": 0, "viewer": 0},
+        "scraper": "stopped",
+        "restart_counts": {"qq": 0, "tui": 0, "viewer": 0, "scraper": 0},
         "qq_pid": 12345,
     }
 
@@ -52,7 +54,7 @@ def _running_status():
 def _make_pm(status=None):
     pm = MagicMock()
     pm.get_status.return_value = status if status is not None else _stopped_status()
-    pm.restart_counts = {"qq": 0, "tui": 0, "viewer": 0}
+    pm.restart_counts = {"qq": 0, "tui": 0, "viewer": 0, "scraper": 0}
     return pm
 
 
@@ -236,7 +238,8 @@ class TestDispatcherStart(unittest.TestCase):
     def test_start_uses_start_methods_map(self):
         self.assertEqual(
             START_METHODS,
-            {"qq": "start_qq", "tui": "start_tui", "viewer": "start_viewer"},
+            {"qq": "start_qq", "tui": "start_tui",
+             "viewer": "start_viewer", "scraper": "start_scraper"},
         )
 
     def test_start_when_crashed_still_starts(self):
@@ -288,7 +291,8 @@ class TestDispatcherStop(unittest.TestCase):
     def test_stop_uses_stop_methods_map(self):
         self.assertEqual(
             STOP_METHODS,
-            {"qq": "stop_qq", "tui": "stop_tui", "viewer": "stop_viewer"},
+            {"qq": "stop_qq", "tui": "stop_tui",
+             "viewer": "stop_viewer", "scraper": "stop_scraper"},
         )
 
     def test_stop_when_crashed_still_stops(self):
@@ -562,6 +566,98 @@ class TestDispatcherResponseShape(unittest.TestCase):
             self.assertIsInstance(r["ok"], bool)
             self.assertIsInstance(r["message"], str)
             self.assertIsInstance(r["data"], dict)
+
+
+class TestScraperParsing(unittest.TestCase):
+    def setUp(self):
+        self.p = CommandParser()
+
+    def test_parse_start_scraper(self):
+        cmd = self.p.parse("start scraper")
+        self.assertEqual(cmd, Cmd(verb="start", noun="scraper", args=[]))
+
+    def test_parse_stop_scraper(self):
+        cmd = self.p.parse("stop scraper")
+        self.assertEqual(cmd, Cmd(verb="stop", noun="scraper", args=[]))
+
+    def test_parse_restart_scraper(self):
+        cmd = self.p.parse("restart scraper")
+        self.assertEqual(cmd, Cmd(verb="restart", noun="scraper", args=[]))
+
+    def test_parse_invalid_target_still_works(self):
+        with self.assertRaises(InvalidTargetError):
+            self.p.parse("start invalid")
+        with self.assertRaises(InvalidTargetError):
+            self.p.parse("stop frobnicate")
+
+
+class TestScraperDispatch(unittest.TestCase):
+    def test_dispatch_start_scraper(self):
+        pm = _make_pm(_stopped_status())
+        d = Dispatcher(pm, {}, "/tmp/conf.json")
+        r = d.dispatch(Cmd(verb="start", noun="scraper"))
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["message"], "scraper started.")
+        pm.start_scraper.assert_called_once()
+
+    def test_dispatch_stop_scraper(self):
+        status = _running_status()
+        status["scraper"] = "running"
+        status["qq"] = "stopped"
+        pm = _make_pm(status)
+        d = Dispatcher(pm, {}, "/tmp/conf.json")
+        r = d.dispatch(Cmd(verb="stop", noun="scraper"))
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["message"], "scraper stopped.")
+        pm.stop_scraper.assert_called_once()
+
+    def test_scraper_allowed_when_qq_stopped(self):
+        status = _stopped_status()
+        status["qq"] = "stopped"
+        pm = _make_pm(status)
+        d = Dispatcher(pm, {}, "/tmp/conf.json")
+        r = d.dispatch(Cmd(verb="start", noun="scraper"))
+        self.assertTrue(r["ok"])
+        pm.start_scraper.assert_called_once()
+
+
+class TestPortMutex(unittest.TestCase):
+    def test_port_mutex_scraper_blocked_when_qq_running(self):
+        status = _running_status()
+        self.assertEqual(status["qq"], "running")
+        pm = _make_pm(status)
+        d = Dispatcher(pm, {}, "/tmp/conf.json")
+        r = d.dispatch(Cmd(verb="start", noun="scraper"))
+        self.assertFalse(r["ok"])
+        self.assertIn("9420", r["message"])
+        self.assertIn("QQ", r["message"])
+        pm.start_scraper.assert_not_called()
+
+    def test_port_mutex_qq_blocked_when_scraper_running(self):
+        status = _stopped_status()
+        status["scraper"] = "running"
+        pm = _make_pm(status)
+        d = Dispatcher(pm, {}, "/tmp/conf.json")
+        r = d.dispatch(Cmd(verb="start", noun="qq"))
+        self.assertFalse(r["ok"])
+        self.assertIn("9420", r["message"])
+        self.assertIn("scraper", r["message"])
+        pm.start_qq.assert_not_called()
+
+
+class TestScraperStatusAndHelp(unittest.TestCase):
+    def test_status_includes_scraper(self):
+        pm = _make_pm(_stopped_status())
+        d = Dispatcher(pm, {}, "/tmp/conf.json")
+        r = d.dispatch(Cmd(verb="status"))
+        self.assertIn("scraper", r["data"])
+        self.assertIn("Scraper", r["message"])
+
+    def test_help_text_includes_scraper(self):
+        pm = _make_pm()
+        d = Dispatcher(pm, {}, "/tmp/conf.json")
+        r = d.dispatch(Cmd(verb="help"))
+        self.assertIn("scraper", r["message"])
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ from src.launcher.commands import (
 
 LOG_PATHS = {
     "qq": "log/launcher/qq.log",
+    "scraper": "log/web_scraper/scraper.log",
     "viewer": "log/viewer/viewer.log",
     "prometheus": "log/prometheus/prometheus.log",
     "tui": "log/launcher/tui.log",
@@ -34,7 +35,7 @@ LOG_PATHS = {
 COMPLETER_WORDS = [
     "start", "stop", "restart", "status", "logs", "config", "health",
     "tail", "help", "quit", "clear",
-    "qq", "tui", "viewer",
+    "qq", "tui", "viewer", "scraper",
     "show", "set", "feeds", "stats",
 ]
 
@@ -121,8 +122,9 @@ class Shell:
             s = self.pm.get_status()
         except Exception:
             return "Status unavailable"
-        return "QQ: {0} | TUI: {1} | Viewer: {2}".format(
-            s.get("qq", "?"), s.get("tui", "?"), s.get("viewer", "?")
+        return "QQ: {qq} | Scraper: {scraper} | TUI: {tui} | Viewer: {viewer}".format(
+            qq=s.get("qq", "?"), scraper=s.get("scraper", "?"),
+            tui=s.get("tui", "?"), viewer=s.get("viewer", "?"),
         )
 
     def _tail_log(self, target):

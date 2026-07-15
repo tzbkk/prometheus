@@ -17,9 +17,9 @@ import threading
 from dataclasses import dataclass, field
 
 HELP_TEXT = """Available commands:
-  start <qq|tui|viewer>   Start a process
-  stop <qq|tui|viewer>    Stop a process
-  restart <qq|tui|viewer> Restart a process
+  start <qq|tui|viewer|scraper>   Start a process
+  stop <qq|tui|viewer|scraper>    Stop a process
+  restart <qq|tui|viewer|scraper> Restart a process
   status                  Show process status
   logs <qq|tui|viewer>    Tail process log (Ctrl+C to stop)
   config show             Show current config
@@ -70,7 +70,7 @@ class CommandParser:
         "start", "stop", "restart", "status", "logs",
         "config", "health", "tail", "help", "quit", "clear",
     }
-    VALID_TARGETS = {"qq", "tui", "viewer"}
+    VALID_TARGETS = {"qq", "tui", "viewer", "scraper"}
     VERBS_REQUIRING_TARGET = {"start", "stop", "restart", "logs"}
     _TAIL_NOUNS = ("feeds", "stats")
 
@@ -106,12 +106,12 @@ class CommandParser:
     def _parse_targeted(self, verb, tokens):
         if len(tokens) < 2:
             raise MissingArgumentError(
-                "'{0}' requires a target: qq, tui, or viewer.".format(verb)
+                "'{0}' requires a target: qq, tui, viewer, or scraper.".format(verb)
             )
         noun = tokens[1]
         if noun not in self.VALID_TARGETS:
             raise InvalidTargetError(
-                "Invalid target: '{0}'. Must be one of: qq, tui, viewer.".format(noun)
+                "Invalid target: '{0}'. Must be one of: qq, tui, viewer, scraper.".format(noun)
             )
         return Cmd(verb=verb, noun=noun, args=tokens[2:])
 
@@ -146,8 +146,18 @@ class CommandParser:
         return Cmd(verb="tail", noun=noun, args=[])
 
 
-START_METHODS = {"qq": "start_qq", "tui": "start_tui", "viewer": "start_viewer"}
-STOP_METHODS = {"qq": "stop_qq", "tui": "stop_tui", "viewer": "stop_viewer"}
+START_METHODS = {
+    "qq": "start_qq",
+    "tui": "start_tui",
+    "viewer": "start_viewer",
+    "scraper": "start_scraper",
+}
+STOP_METHODS = {
+    "qq": "stop_qq",
+    "tui": "stop_tui",
+    "viewer": "stop_viewer",
+    "scraper": "stop_scraper",
+}
 
 
 class Dispatcher:
@@ -210,6 +220,15 @@ class Dispatcher:
             return {"ok": False,
                     "message": "{0} is already running.".format(noun),
                     "data": {}}
+        # Port 9420 mutual exclusion: scraper and qq cannot run simultaneously.
+        if noun == "scraper" and status.get("qq") == "running":
+            return {"ok": False,
+                    "message": "Port 9420 is occupied by QQ. Stop QQ first.",
+                    "data": {}}
+        if noun == "qq" and status.get("scraper") == "running":
+            return {"ok": False,
+                    "message": "Port 9420 is occupied by scraper. Stop scraper first.",
+                    "data": {}}
         getattr(self.pm, START_METHODS[noun])()
         self.pm.restart_counts[noun] = 0
         return {"ok": True, "message": "{0} started.".format(noun), "data": {}}
@@ -255,13 +274,16 @@ class Dispatcher:
     def _format_status_string(s):
         """Render a status dict (from ``pm.get_status()``) as a multi-line string."""
         lines = [
-            "  QQ:     {0:10s}  restart #{1}".format(
+            "  QQ:       {0:10s}  restart #{1}".format(
                 s["qq"], s["restart_counts"]["qq"]
             ),
-            "  TUI:    {0:10s}  restart #{1}".format(
+            "  Scraper:  {0:10s}  restart #{1}".format(
+                s["scraper"], s["restart_counts"]["scraper"]
+            ),
+            "  TUI:      {0:10s}  restart #{1}".format(
                 s["tui"], s["restart_counts"]["tui"]
             ),
-            "  Viewer: {0:10s}  restart #{1}".format(
+            "  Viewer:   {0:10s}  restart #{1}".format(
                 s["viewer"], s["restart_counts"]["viewer"]
             ),
         ]

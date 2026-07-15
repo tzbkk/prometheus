@@ -35,7 +35,7 @@
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `channel_id` | — | 目标频道 guild_id（必填） |
+| `channel_id` | — | 目标频道 guild_id（必填）。获取：打开 `pd.qq.com` → 进入目标频道 → 地址栏 `pd.qq.com/g/{id}` 中的数字 |
 | `channel_name` | — | 频道显示名（用于自动点击匹配） |
 | `scroll_max_iterations` | 50000 | 最大滚动次数上限 |
 | `daemon_mode` | true | 守护模式 |

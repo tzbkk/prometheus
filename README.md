@@ -21,6 +21,10 @@
 ```bash
 # 0. 克隆/复制本项目
 
+# 0a. 配置目标频道（conf/prometheus.conf.json）
+#    channel_id：打开 https://pd.qq.com → 进入目标频道 → 地址栏 pd.qq.com/g/{这一串数字}
+#    channel_name：频道名（用于自动点击匹配）
+
 # 1. 一键安装（从 AppImage 构建 patched QQ，复制 4 个 JS 模块到 qq_patched/）
 bash scripts/setup.sh ~/Downloads/QQ_3.2.29_260528_x86_64_01.AppImage
 #    更新 JS 或升级 QQ 时：rm -rf qq_patched && bash scripts/setup.sh ~/Downloads/QQ_*.AppImage

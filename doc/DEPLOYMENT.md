@@ -162,6 +162,41 @@ bash scripts/start_tui.sh --port 9421
 # 仅 TUI，需要 launcher 已在运行
 ```
 
-## systemd 部署
+ ## systemd 部署
 
 `deploy/qq-prometheus.service` 提供了 systemd user service 模板。可根据需要启用以实现开机自动启动。
+
+## Web Scraper 部署
+
+### 独立部署（无需 QQ）
+
+```bash
+# 1. 配置 conf/prometheus.conf.json (channel_id, guild_number)
+# 2. 运行
+python -m src.web_scraper --daemon
+```
+
+### 通过 Launcher 部署
+
+```bash
+bash scripts/start_launcher.sh
+# launcher shell: start scraper
+```
+
+### systemd 服务
+
+```ini
+[Unit]
+Description=Prometheus Web Scraper
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/prometheus
+ExecStart=/usr/bin/python3 -m src.web_scraper --daemon
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```

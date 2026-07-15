@@ -233,3 +233,73 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 - **LIKE 代替 FTS5**：FTS5 unicode61 不分词 CJK，中文子串搜索（如"高木"）无结果。LIKE 在 8745 条规模上性能足够。
 - **缩略图过滤**：QQ 每张图有 `picUrl`（原图）+ `vecImageUrl[]`（3-4 级缩略图）。详情 API 仅返回匹配 `images[].picUrl` 的本地文件。
 - **头像过滤**：作者头像 URL（`qlogo.cn`）被媒体下载器捕获，feed 列表缩略图和详情媒体列表均过滤排除。
+
+## Web Scraper 架构（prometheus-neo）
+
+```
+web_scraper (Python)
+├── client.py — QQWebClient: pd.qq.com HTTP API (urllib stdlib)
+│   ├── GetGuildFeeds (service_type=12) — 分页拉取帖子
+│   ├── GetFeedComments (service_type=5) — 评论
+│   └── Cookie session + exponential backoff retry
+├── feeds.py — FeedsScraper: 分页循环 + guild_id 过滤
+├── comments.py — CommentsScraper: ThreadPoolExecutor 并发
+├── media.py — MediaDownloader: SHA256+扩展名命名 + 原子写入
+│   ├── 加载 media_index.jsonl → _seen 去重集合
+│   ├── 加载 dead_media_permanent.jsonl → _dead 跳过集合
+│   └── 零字节文件自动重下
+├── store.py — Store: 线程安全 + 去重 (ids.json + comment_keys.json)
+│   └── comments_fetched_ids.json — feed_id→last_count 追踪评论增长
+├── lock.py — Lock: 进程锁 + stale PID 检测 + 崩溃恢复
+├── api_server.py — APIServer: HTTP API (health/stats/config/logs)
+├── daemon.py — Daemon: 定期扫描 + 分页回填 + 评论增长检测
+│   ├── 每个 cycle 从最新页往回翻 (最多 50 页), 遇已抓 feed 停
+│   ├── 对比 live commentCount vs stored → 涨了就重新抓评论
+│   ├── 每 10 cycles 重查所有有评论的旧帖
+│   └── 每个 cycle 写 state.json (SHA256 hash of feeds.jsonl)
+└── __main__.py — 入口: 装配组件 + 日志缓冲 + 进程锁
+    HTTP API: 127.0.0.1:9420 (与 QQ legacy 互斥)
+```
+
+### API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | `{"ok":true,"data":{"status":"ok","scraper":"running"}}` |
+| `/stats` | GET | feeds/comments/media 计数 + daemon 状态 |
+| `/logs` | GET | 日志缓冲 (`?since=N&max=M`) |
+| `/config` | GET/PUT | 查看/修改配置 |
+| `/action/trigger-daemon` | POST | 手动触发扫描 |
+
+### 进程安全
+
+- **进程锁** (`prometheus.lock`): acquire 时写 `dirty:true` + PID, release 时 `dirty:false`
+- **stale PID 检测**: 死 PID 的 lock 自动覆盖, 活 PID 的 lock 阻断双开
+- **崩溃恢复**: 启动时发现 dirty lock → log warning
+- **stdout 重定向**: launcher 启动 scraper 时重定向到 `log/web_scraper/scraper.log`, 不污染 TUI
+
+### 媒体下载
+
+- **命名**: `SHA256(url)[:16] + ".jpg"` / `".mp4"` (与 legacy 完全一致)
+- **去重**: 启动时加载 `media_index.jsonl` → `_seen` 集合, stats 立即显示完整数量
+- **零字节重下**: `filepath.stat().st_size > 0` 检查, 空文件自动重新下载
+- **永久放弃列表**: 3 次重试失败的 URL 写入 `dead_media_permanent.jsonl`, 永不再试
+- **捡漏**: daemon 从 API 获取 live feed (含 legacy 未捕获的视频 URL), 发现文件不在磁盘就下
+
+### 评论增长检测
+
+1. **最新页**: `get_feeds(7,"")` 返回 live `commentCount` → 对比 `comments_fetched_ids.json` 记录的上次数 → 涨了就重抓
+2. **旧帖**: 每 10 cycles 遍历所有有评论的 feed → batch 调 GetFeedComments → Store 去重兜底
+
+### 与 Legacy 的关系
+
+| 特性 | Legacy (inject.js) | Web Scraper |
+|------|-------------------|-------------|
+| 依赖 | QQ AppImage | 无（纯 HTTP） |
+| 数据格式 | feeds.jsonl | 相同 |
+| 评论抓取 | 滚动捕获 (仅 2/307 真实) | API 分页 (5730 真实) |
+| 媒体下载 | QQ 缓存复制 | CDN 下载 + 磁盘对账 |
+| 进程锁 | lock.js (dirty+PID) | lock.py (dirty+PID) |
+| 状态文件 | state.json | 相同 |
+| HTTP API | 9420 | 9420（互斥） |
+| 稳定性 | 依赖 QQ 版本 | web API 可能随时停用 |

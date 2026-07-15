@@ -65,6 +65,38 @@ bash scripts/start_launcher.sh
 tail -f log/prometheus/prometheus.log
 ```
 
+## Web Scraper 模式（推荐）
+
+无需 QQ AppImage，纯 HTTP 抓取 pd.qq.com 公开 API。
+
+```bash
+# 直接运行（守护模式，默认）
+python -m src.web_scraper
+
+# 单次扫描
+python -m src.web_scraper --once
+
+# 通过 launcher 启动
+bash scripts/start_launcher.sh
+# 在 launcher shell 中: start scraper
+```
+
+### 配置
+
+编辑 `conf/prometheus.conf.json`:
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `guild_number` | `Takagi3channel` | 频道唯一标识（从 pd.qq.com 获取） |
+| `scraper_max_workers` | `10` | 并发线程数 |
+| `scraper_daemon_interval_sec` | `120` | 守护模式扫描间隔（秒） |
+| `scraper_api_port` | `9420` | HTTP API 端口（与 QQ legacy 互斥） |
+
+### 数据格式
+
+与 legacy 抓取器完全兼容：`feeds.jsonl`、`comments.jsonl`、`media/`。
+Viewer 无需修改即可浏览 web_scraper 抓取的数据。
+
 ## 停止
 
 ```bash

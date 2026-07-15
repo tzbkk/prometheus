@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
-import sys
 from pathlib import Path
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual import events
 from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 from src.tui.api import LauncherApiClient, PrometheusApiClient
@@ -69,7 +69,7 @@ class PrometheusApp(App):
     TABS: list[type[BaseTab]] = [PrometheusTab, ViewerTab, TuiTab]
 
     bindings = [
-        ("q", "quit", "Quit"),
+        Binding("q", "quit", "Quit", priority=True),
         ("d", "toggle_dark", "Toggle dark mode"),
     ]
 
@@ -189,12 +189,10 @@ class PrometheusApp(App):
             "textual-dark" if self.theme != "textual-dark" else "textual-light"
         )
 
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "q":
+            event.stop()
+            self.exit()
+
     def action_quit(self) -> None:
-        if self._driver is not None:
-            try:
-                self._driver.stop_application_mode()
-                import termios
-                termios.tcflush(self._driver.fileno, termios.TCIFLUSH)
-            except Exception:
-                pass
-        os._exit(0)
+        self.exit()

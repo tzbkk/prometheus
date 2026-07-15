@@ -1,9 +1,9 @@
-"""Entry point: `python3 -m src.launcher` starts QQ + TUI + LauncherApi server."""
+"""Entry point: ``python3 -m src.launcher`` starts the LauncherApi server, a
+background process monitor, and the interactive prompt_toolkit shell."""
 
 import json
 import os
 import signal
-import subprocess
 import sys
 import threading
 
@@ -18,44 +18,6 @@ def _load_config():
         return json.load(fh)
 
 
-def _print_status(pm):
-    s = pm.get_status()
-    print(f"  QQ:     {s['qq']:10s}  restart #{s['restart_counts']['qq']}")
-    print(f"  TUI:    {s['tui']:10s}  restart #{s['restart_counts']['tui']}")
-    print(f"  Viewer: {s['viewer']:10s}  restart #{s['restart_counts']['viewer']}")
-
-
-def _restore_terminal():
-    try:
-        subprocess.run(["reset"], timeout=3)
-    except Exception:
-        pass
-    try:
-        import termios
-        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-    except Exception:
-        pass
-
-
-def _wait_for_tui(pm):
-    while True:
-        proc = pm.processes.get("tui")
-        if proc is None:
-            return
-        rc = proc.wait()
-        _restore_terminal()
-        if rc == 0:
-            print("\nTUI exited cleanly")
-            return
-        if pm.can_restart("tui"):
-            pm.restart_counts["tui"] += 1
-            pm.start_tui()
-            print("\nTUI crashed — restarted")
-        else:
-            print("\nTUI crashed — max restarts exceeded")
-            return
-
-
 def main():
     config = _load_config()
     project_root = os.path.dirname(
@@ -64,6 +26,7 @@ def main():
     os.chdir(project_root)
 
     err_log = os.path.join("log", "launcher", "stderr.log")
+    os.makedirs(os.path.dirname(err_log), exist_ok=True)
     sys.stderr = open(err_log, "a")
 
     pm = ProcessManager(config)
@@ -72,7 +35,22 @@ def main():
     api_thread = threading.Thread(target=api.serve_forever, daemon=True)
     api_thread.start()
 
+    # Background monitor thread: checks for crashed processes and auto-restarts
+    monitor_stop = threading.Event()
+
+    def _monitor_loop():
+        while not monitor_stop.is_set():
+            try:
+                pm.monitor()
+            except Exception:
+                pass  # Don't let monitor thread crash the launcher
+            monitor_stop.wait(1.0)
+
+    monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
+    monitor_thread.start()
+
     def _on_signal(signum, frame):
+        monitor_stop.set()
         pm.graceful_shutdown()
         api.stop()
         sys.exit(0)
@@ -80,43 +58,18 @@ def main():
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
-    _wait_for_tui(pm)
+    # shell.run() blocks until the quit command, then returns
+    from .commands import Dispatcher
+    from .shell import Shell
 
-    print("\n=== Prometheus Launcher ===")
-    print("  [Enter]=status  s=TUI  v=viewer  p=stop QQ  r=start all  q=quit  h=help\n")
-    while True:
-        try:
-            cmd = input("> ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            cmd = "q"
-        if cmd in ("q", "quit", "exit"):
-            print("Shutting down...")
-            _on_signal(None, None)
-            break
-        elif cmd == "":
-            _print_status(pm)
-        elif cmd in ("s", "start"):
-            pm.start_tui()
-            _wait_for_tui(pm)
-            print()
-        elif cmd in ("v", "viewer"):
-            pm.start_viewer()
-            viewer_port = config.get("viewer_port", 9422)
-            print("Viewer started at http://127.0.0.1:{0}".format(viewer_port))
-        elif cmd in ("p", "stop"):
-            pm.stop_qq()
-            print("QQ stopped")
-        elif cmd in ("r", "restart"):
-            pm.stop_qq()
-            pm.start_qq()
-            pm.start_tui()
-            _wait_for_tui(pm)
-            print()
-        elif cmd in ("a", "status"):
-            _print_status(pm)
-        elif cmd in ("h", "help"):
-            print("  [Enter]=status  s=TUI  v=viewer  p=stop QQ  r=start all  q=quit  h=help")
+    dispatcher = Dispatcher(pm, config, CONFIG_PATH)
+    shell = Shell(pm, config, CONFIG_PATH, dispatcher)
+    shell.run()
+
+    # After shell exits (quit command), clean up
+    monitor_stop.set()
+    pm.graceful_shutdown()
+    api.stop()
 
 
 if __name__ == "__main__":

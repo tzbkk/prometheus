@@ -144,8 +144,11 @@ class ProcessManager:
             proc = self.processes.get(name)
             if proc is None:
                 continue
-            if proc.poll() is not None:
+            rc = proc.poll()
+            if rc is not None:
                 self.processes.pop(name, None)
+                if name == "tui" and rc == 0:
+                    continue
                 self.auto_restart(name)
 
     def graceful_shutdown(self):

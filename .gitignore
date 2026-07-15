@@ -4,6 +4,8 @@ output/
 qq_patched/
 __pycache__/
 *.pyc
+*.egg-info/
+.coverage
 *.log
 db/*
 !db/.gitkeep

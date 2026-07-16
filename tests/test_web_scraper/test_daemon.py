@@ -25,12 +25,17 @@ def _make_feed(feed_id, comment_count=5):
     }
 
 
-def _make_mocks(feed_page=None):
+def _make_mocks(feed_page=None, channels=None):
     """Create mocked scrapers + store."""
     feeds_scraper = MagicMock()
     feeds_scraper.client = MagicMock()
     feeds_scraper._accepts = MagicMock(return_value=True)
-    feeds_scraper.client.get_feeds.return_value = (
+
+    if channels is None:
+        channels = [{"channel_id": "635032487", "name": "帖子广场"}]
+    feeds_scraper.client.get_guild_channels.return_value = channels
+
+    feeds_scraper.client.get_channel_feeds.return_value = (
         feed_page if feed_page is not None else [_make_feed("B_1")],
         "",
         False,
@@ -55,8 +60,8 @@ def _make_mocks(feed_page=None):
     return feeds_scraper, comments_scraper, media_downloader, store
 
 
-def _make_daemon(feed_page=None):
-    fs, cs, md, store = _make_mocks(feed_page)
+def _make_daemon(feed_page=None, channels=None):
+    fs, cs, md, store = _make_mocks(feed_page, channels)
     stats: dict = {}
     daemon = Daemon(fs, cs, md, store, interval_sec=0.01, stats=stats)
     return daemon, fs, cs, md, store, stats
@@ -65,7 +70,8 @@ def _make_daemon(feed_page=None):
 def test_run_once_calls_feeds_scraper():
     daemon, fs, _cs, _md, _store, _stats = _make_daemon()
     daemon.run_once()
-    fs.client.get_feeds.assert_called_once_with(7, "")
+    fs.client.get_guild_channels.assert_called_once()
+    fs.client.get_channel_feeds.assert_called_once_with("635032487", 7, "")
 
 
 def test_run_once_calls_media_downloader():
@@ -96,11 +102,11 @@ def test_run_once_sets_daemon_running_during_cycle():
     daemon, fs, _cs, _md, _store, stats = _make_daemon()
     seen_during = {}
 
-    def spy_get_feeds(*args, **kwargs):
+    def spy_get_channel_feeds(*args, **kwargs):
         seen_during["daemon_running"] = stats.get("daemon_running")
-        return fs.client.get_feeds.return_value
+        return fs.client.get_channel_feeds.return_value
 
-    fs.client.get_feeds.side_effect = spy_get_feeds
+    fs.client.get_channel_feeds.side_effect = spy_get_channel_feeds
     daemon.run_once()
     assert seen_during["daemon_running"] is True
     assert stats["daemon_running"] is False
@@ -114,7 +120,7 @@ def test_run_once_exception_doesnt_crash_run_forever():
         calls["count"] += 1
         raise RuntimeError("simulated scrape failure")
 
-    fs.client.get_feeds.side_effect = boom
+    fs.client.get_channel_feeds.side_effect = boom
 
     def stop_after_delay():
         time.sleep(0.05)
@@ -150,7 +156,7 @@ def test_run_once_counts_new_feeds():
     store.append_feed.return_value = True
     daemon.run_once()
     assert store.append_feed.call_count == 4
-    assert fs.client.get_feeds.call_count == 1
+    assert fs.client.get_channel_feeds.call_count == 1
     assert stats["scanned_feeds"] == 1
 
 
@@ -159,12 +165,12 @@ def test_run_once_paginates_until_all_captured():
     page2 = [_make_feed("B_old1")]
     daemon, fs, _cs, _md, store, _stats = _make_daemon()
     store.append_feed.side_effect = [True, True, False]
-    fs.client.get_feeds.side_effect = [
+    fs.client.get_channel_feeds.side_effect = [
         (page1, "cursor1", False),
         (page2, "cursor2", False),
     ]
     daemon.run_once()
-    assert fs.client.get_feeds.call_count == 2
+    assert fs.client.get_channel_feeds.call_count == 2
     assert store.append_feed.call_count == 3
 
 
@@ -173,7 +179,7 @@ def test_run_once_paginates_stops_on_empty_attch():
     daemon, fs, _cs, _md, store, _stats = _make_daemon(feed_page=page1)
     store.append_feed.return_value = True
     daemon.run_once()
-    assert fs.client.get_feeds.call_count == 1
+    assert fs.client.get_channel_feeds.call_count == 1
 
 
 def test_write_state_creates_state_json(tmp_path):
@@ -193,3 +199,49 @@ def test_write_state_creates_state_json(tmp_path):
     assert len(state["hash"]) == 64
     assert state["hashFiles"] == ["feeds.jsonl"]
     assert state["bottomReached"] is True
+
+
+def test_recheck_batches_old_feeds_round_robin():
+    """Old-feed comment re-check processes only batch_size feeds per cycle."""
+    old_ids = [f"B_old_{i}" for i in range(200)]
+    daemon, _fs, cs, _md, store, _stats = _make_daemon()
+    store.get_all_feed_ids_with_comments.return_value = old_ids
+
+    daemon.run_once()
+    args, kwargs = cs.scrape_all.call_args
+    batch = args[0] if args else kwargs.get("feeds", [])
+    assert len(batch) == daemon._recheck_batch_size
+    assert kwargs.get("max_workers") == daemon._recheck_workers
+
+
+def test_recheck_cursor_advances_each_cycle():
+    """Round-robin cursor moves forward so different feeds are checked each cycle."""
+    old_ids = [f"B_old_{i}" for i in range(120)]
+    daemon, _fs, cs, _md, store, _stats = _make_daemon()
+    store.get_all_feed_ids_with_comments.return_value = old_ids
+
+    daemon.run_once()
+    batch1 = cs.scrape_all.call_args[0][0]
+    ids1 = {f["id"] for f in batch1}
+
+    daemon.run_once()
+    batch2 = cs.scrape_all.call_args[0][0]
+    ids2 = {f["id"] for f in batch2}
+
+    assert daemon._recheck_cursor == 100
+    assert ids1 != ids2
+
+
+def test_recheck_wraps_around():
+    """Cursor wraps modulo len(old_ids) after a full rotation."""
+    old_ids = [f"B_{i}" for i in range(10)]
+    daemon, _fs, _cs, _md, store, _stats = _make_daemon()
+    store.get_all_feed_ids_with_comments.return_value = old_ids
+    daemon._recheck_batch_size = 4
+
+    daemon.run_once()
+    assert daemon._recheck_cursor == 4
+    daemon.run_once()
+    assert daemon._recheck_cursor == 8
+    daemon.run_once()
+    assert daemon._recheck_cursor == 2  # wraps: (8+4) % 10

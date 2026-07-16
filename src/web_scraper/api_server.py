@@ -16,7 +16,7 @@ Endpoints (polled by src/tui/api_client.py):
 import json
 import logging
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 _DEFAULT_PORT = 9420
@@ -141,27 +141,24 @@ class APIServer:
                 max_lines = self._qs_int(qs, "max", 0)
                 buf = list(outer.stats.get("log_buffer", []) or [])
                 total = len(buf)
-                if since < 0:
-                    since = 0
-                sliced = buf[since:]
+                filtered = [
+                    e for e in buf if isinstance(e, dict) and e.get("seq", 0) > since
+                ]
                 if max_lines and max_lines > 0:
-                    sliced = sliced[:max_lines]
-                self._ok({"lines": sliced, "total": total})
+                    filtered = filtered[:max_lines]
+                self._ok({"lines": filtered, "total": total})
 
             def _handle_trigger(self):
                 self._read_body()
                 cb = outer._trigger_callback
-                triggered = False
-                if cb is not None:
-                    try:
-                        cb()
-                        triggered = True
-                    except Exception as exc:
-                        logging.getLogger(__name__).warning(
-                            "trigger-daemon callback failed: %s", exc
-                        )
-                        triggered = False
-                self._ok({"triggered": triggered})
+                if cb is None:
+                    self._ok({"triggered": False})
+                    return
+                if outer.stats.get("daemon_running"):
+                    self._ok({"triggered": False, "reason": "already running"})
+                    return
+                threading.Thread(target=cb, daemon=True).start()
+                self._ok({"triggered": True})
 
             @staticmethod
             def _qs_int(qs, key, default):
@@ -179,7 +176,7 @@ class APIServer:
         self._trigger_callback = callback
 
     def start(self):
-        self.server = HTTPServer(("127.0.0.1", self._requested_port), self._handler_cls)
+        self.server = ThreadingHTTPServer(("127.0.0.1", self._requested_port), self._handler_cls)
         self.port = self.server.server_address[1]
         self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self._thread.start()
@@ -197,6 +194,6 @@ class APIServer:
 
     def serve_forever(self):
         if self.server is None:
-            self.server = HTTPServer(("127.0.0.1", self._requested_port), self._handler_cls)
+            self.server = ThreadingHTTPServer(("127.0.0.1", self._requested_port), self._handler_cls)
             self.port = self.server.server_address[1]
         self.server.serve_forever()

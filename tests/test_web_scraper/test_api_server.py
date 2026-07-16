@@ -17,6 +17,7 @@ Envelope contract (project-wide):
 import json
 import os
 import sys
+import threading
 import time
 import unittest
 import urllib.error
@@ -41,7 +42,11 @@ def _make_stats(**overrides):
         "media_count": 75,
         "last_scan_ts": 1234567890,
         "daemon_running": True,
-        "log_buffer": ["[INFO] line 1", "[INFO] line 2", "[INFO] line 3"],
+        "log_buffer": [
+            {"seq": 1, "level": "INFO", "msg": "line 1", "ts": "2026-01-01 00:00:01,000"},
+            {"seq": 2, "level": "INFO", "msg": "line 2", "ts": "2026-01-01 00:00:02,000"},
+            {"seq": 3, "level": "INFO", "msg": "line 3", "ts": "2026-01-01 00:00:03,000"},
+        ],
         "config": {"scraper_max_workers": 10},
     }
     stats.update(overrides)
@@ -215,7 +220,8 @@ class TestLogs(unittest.TestCase):
             data = body["data"]
             self.assertIn("lines", data)
             self.assertEqual(data["total"], 3)
-            self.assertEqual(data["lines"], ["[INFO] line 1", "[INFO] line 2", "[INFO] line 3"])
+            self.assertEqual(len(data["lines"]), 3)
+            self.assertEqual(data["lines"][0]["msg"], "line 1")
         finally:
             api.stop()
 
@@ -225,8 +231,8 @@ class TestLogs(unittest.TestCase):
             status, body = _request(base, "/logs?since=1")
             self.assertEqual(status, 200)
             data = body["data"]
-            # since=1 → skip index 0, return entries at/after index 1
-            self.assertEqual(data["lines"], ["[INFO] line 2", "[INFO] line 3"])
+            self.assertEqual(len(data["lines"]), 2)
+            self.assertEqual(data["lines"][0]["seq"], 2)
             self.assertEqual(data["total"], 3)
         finally:
             api.stop()
@@ -238,7 +244,8 @@ class TestLogs(unittest.TestCase):
             self.assertEqual(status, 200)
             data = body["data"]
             self.assertEqual(len(data["lines"]), 2)
-            self.assertEqual(data["lines"], ["[INFO] line 1", "[INFO] line 2"])
+            self.assertEqual(data["lines"][0]["seq"], 1)
+            self.assertEqual(data["lines"][1]["seq"], 2)
         finally:
             api.stop()
 
@@ -286,7 +293,26 @@ class TestTriggerDaemon(unittest.TestCase):
     """POST /action/trigger-daemon → invokes the registered trigger callback."""
 
     def test_trigger_daemon_calls_callback(self):
-        api, base = _start_server()
+        stats = _make_stats(daemon_running=False)
+        api, base = _start_server(stats=stats)
+        called = threading.Event()
+
+        def cb():
+            called.set()
+
+        api.set_trigger_callback(cb)
+        try:
+            status, body = _request(base, "/action/trigger-daemon", method="POST", body={})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["data"].get("triggered"), True)
+            self.assertTrue(called.wait(timeout=5))
+        finally:
+            api.stop()
+
+    def test_trigger_rejected_when_daemon_running(self):
+        stats = _make_stats(daemon_running=True)
+        api, base = _start_server(stats=stats)
         called = {"flag": False}
 
         def cb():
@@ -296,9 +322,8 @@ class TestTriggerDaemon(unittest.TestCase):
         try:
             status, body = _request(base, "/action/trigger-daemon", method="POST", body={})
             self.assertEqual(status, 200)
-            self.assertTrue(body["ok"])
-            self.assertEqual(body["data"].get("triggered"), True)
-            self.assertTrue(called["flag"])
+            self.assertEqual(body["data"].get("triggered"), False)
+            self.assertFalse(called["flag"])
         finally:
             api.stop()
 

@@ -108,3 +108,32 @@ class FeedsScraper:
         """
         vec_feed, _, _ = self.client.get_feeds(7, "")
         return self._ingest(vec_feed)
+
+    def scrape_channel(self, channel_id: str, from_: int = 7) -> int:
+        """Paginate one channel via ``GetChannelTimelineFeeds``.
+
+        pd.qq.com uses this endpoint for channel-specific feeds (12 per
+        page, ``isFinish`` when exhausted).  Returns the number of NEW
+        feeds written.
+
+        Args:
+            channel_id: Numeric channel ID string.
+            from_: Feed ordering (7 = latest/recommended).
+        """
+        attch_info = ""
+        page = 0
+        total_new = 0
+
+        while True:
+            vec_feed, attch_info, is_finish = self.client.get_channel_feeds(
+                channel_id, from_, attch_info
+            )
+            total_new += self._ingest(vec_feed)
+            page += 1
+
+            if is_finish or not vec_feed or not attch_info:
+                break
+            if page >= 1 and total_new == 0:
+                break
+
+        return total_new

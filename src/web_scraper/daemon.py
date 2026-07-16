@@ -71,7 +71,13 @@ class Daemon:
 
         self._stop_event = threading.Event()
         self._cycle = 0
-        self._old_feed_recheck_interval = 10
+        # Round-robin re-check: process a small batch of old feeds each cycle
+        # instead of all at once. 6000+ concurrent requests cause QQ API to
+        # rate-limit (SSL handshake timeouts). At 50/cycle × 120s interval,
+        # full rotation takes ~4 hours — gentle enough for QQ's servers.
+        self._recheck_batch_size = 50
+        self._recheck_cursor = 0
+        self._recheck_workers = 3
         self._log = logging.getLogger(__name__)
 
     def run_once(self) -> dict[str, Any]:
@@ -93,34 +99,55 @@ class Daemon:
 
             all_feeds: list = []
             attch_info = ""
-            pages = 0
-            _MAX_PAGES = 50
 
-            while pages < _MAX_PAGES:
-                vec_feed, attch_info, finish = self.feeds_scraper.client.get_feeds(
-                    7, attch_info
-                )
-                if not vec_feed:
-                    break
+            # Collect feeds from ALL guild channels via GetChannelTimelineFeeds.
+            # pd.qq.com uses this endpoint for each channel tab; GetGuildFeeds
+            # alone only returns the default channel (帖子广场).
+            channels = self.feeds_scraper.client.get_guild_channels()
+            if not channels:
+                channels = [{"channel_id": self.feeds_scraper.channel_id, "name": "default"}]
 
-                page_new = 0
-                for feed in vec_feed:
-                    if not self.feeds_scraper._accepts(feed):
-                        continue
-                    all_feeds.append(feed)
-                    if self.store.append_feed(feed):
-                        new_feeds += 1
-                        page_new += 1
+            for ch in channels:
+                ch_id = str(ch.get("channel_id", ""))
+                ch_name = ch.get("name", "?")
+                if not ch_id:
+                    continue
+                ch_attch = ""
+                ch_pages = 0
+                _MAX_CH_PAGES = 50
+                while ch_pages < _MAX_CH_PAGES:
                     try:
-                        media_count += self.media_downloader.download_feed_media(feed)
+                        vec_feed, ch_attch, finish = (
+                            self.feeds_scraper.client.get_channel_feeds(
+                                ch_id, 7, ch_attch
+                            )
+                        )
                     except Exception:
                         self._log.exception(
-                            "media download failed for feed=%s", feed.get("id")
+                            "channel feed fetch failed for %s", ch_name
                         )
+                        break
+                    if not vec_feed:
+                        break
 
-                pages += 1
-                if page_new == 0 or finish or not attch_info:
-                    break
+                    page_new = 0
+                    for feed in vec_feed:
+                        if not self.feeds_scraper._accepts(feed):
+                            continue
+                        all_feeds.append(feed)
+                        if self.store.append_feed(feed):
+                            new_feeds += 1
+                            page_new += 1
+                        try:
+                            media_count += self.media_downloader.download_feed_media(feed)
+                        except Exception:
+                            self._log.exception(
+                                "media download failed for feed=%s", feed.get("id")
+                            )
+
+                    ch_pages += 1
+                    if page_new == 0 or finish or not ch_attch:
+                        break
 
             # Fetch comments for feeds whose live commentCount
             # exceeds what we last saw (catches new comments on recent posts).
@@ -155,13 +182,21 @@ class Daemon:
                         cc = 0
                     self.store.mark_comments_fetched(fid, cc)
 
-            # Periodically re-check old feeds whose comments may have grown.
-            if self._cycle % self._old_feed_recheck_interval == 0:
-                old_ids = self.store.get_all_feed_ids_with_comments()
-                self._log.info("Re-checking %d old feeds for comment growth", len(old_ids))
+            # Re-check a small round-robin batch of old feeds for comment
+            # growth (feeds no longer visible in the API's ~4-month window).
+            old_ids = self.store.get_all_feed_ids_with_comments()
+            if old_ids:
+                n = len(old_ids)
+                batch = min(self._recheck_batch_size, n)
+                start = self._recheck_cursor % n
+                batch_ids = [old_ids[(start + i) % n] for i in range(batch)]
+                self._recheck_cursor = (start + batch) % n
+
+                recheck = [{"id": fid, "commentCount": 1} for fid in batch_ids]
                 try:
-                    recheck = [{"id": fid, "commentCount": 1} for fid in old_ids]
-                    new_comments += self.comments_scraper.scrape_all(recheck)
+                    new_comments += self.comments_scraper.scrape_all(
+                        recheck, max_workers=self._recheck_workers
+                    )
                 except Exception:
                     self._log.exception("old feed comment re-check failed")
 

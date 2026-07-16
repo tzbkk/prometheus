@@ -125,6 +125,56 @@ class QQWebClient:
             bool(data.get("isFinish", False)),
         )
 
+    def get_guild_channels(self) -> list[dict]:
+        """Return all channels of the guild.
+
+        Calls ``GetGuildFeeds`` with ``need_channel_list=True`` and
+        returns the ``channels`` array. Empty list on error.
+        """
+        body = {
+            "count": 1,
+            "from": 7,
+            "guild_id": self.guild_id,
+            "get_type": 1,
+            "feedAttchInfo": "",
+            "sortOption": 0,
+            "need_channel_list": True,
+            "need_top_info": False,
+        }
+        resp = self._post("GetGuildFeeds", body, service_type=12)
+        data = resp.get("data") if isinstance(resp.get("data"), dict) else None
+        return (data or {}).get("channels") or []
+
+    def get_channel_feeds(
+        self, channel_id: str, from_: int = 7, feed_attch_info: str = ""
+    ) -> tuple[list, str, bool]:
+        """Call ``GetChannelTimelineFeeds`` (service_type=11).
+
+        pd.qq.com uses this endpoint for channel-specific feeds (12 per
+        page, ``count`` is ignored).  The ``channelSign`` identifies the
+        channel and guild.
+
+        Returns ``(vecFeed, feedAttchInfo, isFinish)`` with safe defaults.
+        """
+        body = {
+            "count": 1,
+            "from": from_,
+            "channelSign": {
+                "guild_id": self.guild_id,
+                "channel_id": str(channel_id),
+            },
+            "feedAttchInfo": feed_attch_info,
+            "sortOption": 0,
+        }
+        resp = self._post("GetChannelTimelineFeeds", body, service_type=11)
+        data = resp.get("data") if isinstance(resp.get("data"), dict) else None
+        data = data or resp
+        return (
+            data.get("vecFeed", []) or [],
+            data.get("feedAttchInfo", "") or "",
+            bool(data.get("isFinish", False)),
+        )
+
     def get_feed_comments(
         self, feed_id: str, list_num: int = 20, attch_info: str = ""
     ) -> tuple[list, int, str]:

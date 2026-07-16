@@ -245,7 +245,8 @@ web_scraper (Python)
 ├── feeds.py — FeedsScraper: 分页循环 + guild_id 过滤
 ├── comments.py — CommentsScraper: ThreadPoolExecutor 并发
 ├── media.py — MediaDownloader: SHA256+扩展名命名 + 原子写入
-│   ├── 加载 media_index.jsonl → _seen 去重集合
+│   ├── urlnorm.py — 剥离 QQ CDN volatile 参数 (dis_k, dis_t) 后 hash
+│   ├── 加载 media_index.jsonl → _seen 去重集合 (normalized URL)
 │   ├── 加载 dead_media_permanent.jsonl → _dead 跳过集合
 │   └── 零字节文件自动重下
 ├── store.py — Store: 线程安全 + 去重 (ids.json + comment_keys.json)
@@ -280,7 +281,8 @@ web_scraper (Python)
 
 ### 媒体下载
 
-- **命名**: `SHA256(url)[:16] + ".jpg"` / `".mp4"` (与 legacy 完全一致)
+- **命名**: `SHA256(normalized_url)[:16] + ".jpg"` / `".mp4"` (与 legacy 完全一致)
+- **URL 正则化**: QQ 视频 CDN 的 `dis_k`/`dis_t` 鉴权参数每次请求都变 → 剥离后 hash 才稳定, 防止同一视频反复下载
 - **去重**: 启动时加载 `media_index.jsonl` → `_seen` 集合, stats 立即显示完整数量
 - **零字节重下**: `filepath.stat().st_size > 0` 检查, 空文件自动重新下载
 - **永久放弃列表**: 3 次重试失败的 URL 写入 `dead_media_permanent.jsonl`, 永不再试

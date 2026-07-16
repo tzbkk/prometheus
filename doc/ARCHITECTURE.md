@@ -114,7 +114,7 @@ GNOME Mutter / Wayland 在窗口遮挡时不发送 `wl_surface.frame` 回调 →
 | `/start` | POST | 仅启动 QQ（不碰 TUI） |
 | `/stop` | POST | 停止 QQ |
 | `/restart` | POST | 同步重启 QQ（含健康检查） |
-| `/status` | GET | 进程状态 + 重启计数 |
+| `/status` | GET | 进程状态 + 重启计数 + `qq_pid`/`scraper_pid` |
 | `/shutdown` | POST | 关闭所有进程 |
 
 ## Launcher
@@ -135,7 +135,7 @@ Python 标准库进程管理器（`src/launcher/`），依赖 prompt_toolkit 提
 - **两个标签页**：Prometheus（状态/控制/日志/配置/倒计时）+ TUI（设置/帮助）
 - **退出机制**：`on_key` 拦截 'q' 调 `self.exit()`（textual 正常退出流程，自动恢复终端）
 - **DISCONNECTED 横幅**：QQ API 不可用时显示，恢复后自动消失
-- **PID 变化检测**：QQ restart 后 `_last_log_seq` 重置为 0，确保新日志能显示
+- **PID 变化检测**：QQ 或 scraper restart 后 `_last_log_seq` 重置为 0，确保新日志能显示
 - **@work(thread=True)**：kill/restart HTTP 操作在后台线程，不阻塞事件循环
 
 ## 日志系统
@@ -143,7 +143,7 @@ Python 标准库进程管理器（`src/launcher/`），依赖 prompt_toolkit 提
 四级日志（ERROR/WARN/INFO/DEBUG）：
 
 - `log_level` 配置控制（默认 INFO）
-- 内存环形缓冲（`log_buffer_lines`，默认 500）
+- 内存环形缓冲（`log_buffer_lines`，默认 500），按 `entry.seq` 过滤（非数组索引）
 - 文件双写 + 10MB 自动轮转（保留 3 个旧文件）
 - 文件格式：`[LEVEL] ISO_TIMESTAMP message`
 - 日志目录：`log/prometheus/prometheus.log`
@@ -252,11 +252,12 @@ web_scraper (Python)
 ├── store.py — Store: 线程安全 + 去重 (ids.json + comment_keys.json)
 │   └── comments_fetched_ids.json — feed_id→last_count 追踪评论增长
 ├── lock.py — Lock: 进程锁 + stale PID 检测 + 崩溃恢复
-├── api_server.py — APIServer: HTTP API (health/stats/config/logs)
+├── api_server.py — APIServer: HTTP API (ThreadingHTTPServer, health/stats/config/logs)
+│   └── trigger-daemon 异步执行（后台线程），daemon_running 时拒绝重复触发
 ├── daemon.py — Daemon: 定期扫描 + 分页回填 + 评论增长检测
 │   ├── 每个 cycle 从最新页往回翻 (最多 50 页), 遇已抓 feed 停
 │   ├── 对比 live commentCount vs stored → 涨了就重新抓评论
-│   ├── 每 10 cycles 重查所有有评论的旧帖
+│   ├── 每 cycle 轮转回查 50 个旧帖 (3 线程, 防止 QQ API 限流)
 │   └── 每个 cycle 写 state.json (SHA256 hash of feeds.jsonl)
 └── __main__.py — 入口: 装配组件 + 日志缓冲 + 进程锁
     HTTP API: 127.0.0.1:9420 (与 QQ legacy 互斥)
@@ -268,9 +269,9 @@ web_scraper (Python)
 |------|------|------|
 | `/health` | GET | `{"ok":true,"data":{"status":"ok","scraper":"running"}}` |
 | `/stats` | GET | feeds/comments/media 计数 + daemon 状态 |
-| `/logs` | GET | 日志缓冲 (`?since=N&max=M`) |
+| `/logs` | GET | 日志缓冲（`?since=N&max=M`，按 `entry.seq > N` 过滤） |
 | `/config` | GET/PUT | 查看/修改配置 |
-| `/action/trigger-daemon` | POST | 手动触发扫描 |
+| `/action/trigger-daemon` | POST | 手动触发扫描（异步，立即返回） |
 
 ### 进程安全
 
@@ -291,7 +292,7 @@ web_scraper (Python)
 ### 评论增长检测
 
 1. **最新页**: `get_feeds(7,"")` 返回 live `commentCount` → 对比 `comments_fetched_ids.json` 记录的上次数 → 涨了就重抓
-2. **旧帖**: 每 10 cycles 遍历所有有评论的 feed → batch 调 GetFeedComments → Store 去重兜底
+2. **旧帖**: 每 cycle 轮转回查 50 个 (3 线程), 全量覆盖 ~4 小时 → batch 调 GetFeedComments → Store 去重兜底
 
 ### 与 Legacy 的关系
 

@@ -22,3 +22,6 @@ prometheus = ["inject.js"]
 
 [tool.setuptools.dynamic]
 version = {attr = "prometheus.__version__"}
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

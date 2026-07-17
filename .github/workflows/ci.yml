@@ -68,8 +68,8 @@ jobs:
           import json
           for line in open('data/feeds.jsonl'):
               f = json.loads(line)
-              assert 'feed_id' in f, f'missing feed_id: {list(f.keys())}'
-          print('All feeds have feed_id')
+              assert 'id' in f, f'missing id: {list(f.keys())}'
+          print('All feeds have id')
           "
 
       # === Viewer backend functional test ===

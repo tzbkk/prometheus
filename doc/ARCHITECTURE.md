@@ -237,6 +237,8 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 - **LIKE 代替 FTS5**：FTS5 unicode61 不分词 CJK，中文子串搜索（如"高木"）无结果。LIKE 在 8745 条规模上性能足够。
 - **缩略图过滤**：QQ 每张图有 `picUrl`（原图）+ `vecImageUrl[]`（3-4 级缩略图）。详情 API 仅返回匹配 `images[].picUrl` 的本地文件。
 - **头像过滤**：作者头像 URL（`qlogo.cn`）被媒体下载器捕获，feed 列表缩略图和详情媒体列表均过滤排除。
+- **多频道浏览**：Viewer 扫描所有 `data/*/feeds.jsonl` 目录，即使配置中已删除频道仍可浏览历史数据（G16）。
+- **媒体 URL 路由**：媒体路由改为双段 `/media/<guild_id>/<filename>`，对应 `data/<guild_id>/media/<filename>`（Breaking change）。
 
 ## Web Scraper 架构（prometheus-neo）
 
@@ -266,6 +268,26 @@ web_scraper (Python)
 └── __main__.py — 入口: 装配组件 + 日志缓冲 + 进程锁
     HTTP API: 127.0.0.1:9420 (与 QQ legacy 互斥)
 ```
+
+### 多频道抓取流程
+
+**Scraper 多频道流程：**
+- 单进程、单守护进程，每轮循环顺序遍历所有配置的频道
+- 每个频道拥有独立的 `GuildContext`（client、store、scrapers、per-guild recheck cursor）
+- 全局 rate Semaphore 限制所有频道的聚合 API 并发（防止超额请求）
+- 容错构造：某个频道失败（网络/地理封锁）会跳过，其他频道继续执行
+- 数据布局：`data/<guild_id>/` 每个频道独立目录，进程锁保持在父级 `data/prometheus.lock`
+- 统计信息：`/stats` API 返回 per-guild breakdown + 顶层总数
+
+**Viewer 频道发现：**
+- `discover_guilds(data_dir)` 扫描 `data/*/feeds.jsonl` — 所有存在 feeds 的数字目录（即使配置中已删除仍可浏览）
+- 名称增强：索引时从 `conf/guilds.conf.json` 读取频道名称写入 SQLite `guilds` 表（运行时不再读配置）
+- 每频道增量 offset 追踪（B2）
+- 媒体 URL：`/media/<guild_id>/<filename>`（双段路由）
+
+**自动迁移（B1）：**
+- 启动时检测旧版扁平 `data/` → 自动迁移到 `data/<guild_id>/feeds.jsonl`（针对首个/legacy 频道）
+- 幂等操作：已迁移则无操作
 
 ### API 端点
 

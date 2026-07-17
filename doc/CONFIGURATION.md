@@ -105,3 +105,43 @@
 3. 打开浏览器开发者工具 → Network
 4. 查找 GetFeedComments 请求
 5. 在请求体中找到 `channelSign.guild_number` 的值
+
+## conf/guilds.conf.json（多频道支持）
+
+用于配置多个频道抓取目标，scraper 会为每个频道创建独立目录 `data/<guild_id>/`。
+
+### 文件格式
+
+```json
+{
+  "_comment": "Multi-guild scrape targets. Scraper writes to data/<guild_id>/.",
+  "guilds": [
+    {"guild_id": "7743321643036658", "guild_number": "Takagi3channel", "name": "擅长捉弄的高木同学"}
+  ]
+}
+```
+
+### 字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `guild_id` | string | 频道数字 ID（必填），从 `pd.qq.com/g/{guild_id}` 地址栏获取 |
+| `guild_number` | string | 频道唯一标识 slug，用于 GetFeedComments API |
+| `name` | string | 频道显示名（用于 Viewer/TUI 显示） |
+
+### 配置文件解析顺序
+
+1. scraper 会在 `prometheus.conf.json` 所在目录查找 `guilds.conf.json`（遵循 `PROMETHEUS_CONFIG` 环境变量）
+2. 若未找到，fallback 到项目默认位置 `conf/guilds.conf.json`
+3. 若 `guilds.conf.json` 不存在，scraper 会从 `prometheus.conf.json` 的 `channel_id`/`guild_number`/`channel_name` 字段构建单个频道（兼容旧版配置）
+
+### 验证规则
+
+- `guild_id` 必须为非空数字字符串
+- 缺少 `guild_id` 或 `guild_number` 的条目会被跳过（记录警告日志）
+
+### 注意事项
+
+- **不支持热重载**：添加/删除频道需编辑配置文件并重启 scraper
+- **自动迁移**：若检测到旧版扁平 `data/` 目录，会自动迁移到 `data/<guild_id>/`（幂等操作）
+- **手动迁移**：也可运行 `python scripts/migrate_multi_guild.py [--data-dir <path>] [--guild-id <id>]` 手动迁移

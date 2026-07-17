@@ -92,10 +92,14 @@ bash scripts/start_launcher.sh
 | `scraper_daemon_interval_sec` | `120` | 守护模式扫描间隔（秒） |
 | `scraper_api_port` | `9420` | HTTP API 端口（与 QQ legacy 互斥） |
 
+**多频道支持**：创建 `conf/guilds.conf.json` 配置多个频道，scraper 会为每个频道创建独立数据目录 `data/<guild_id>/`。详情见 [doc/CONFIGURATION.md](doc/CONFIGURATION.md)。
+
 ### 数据格式
 
 与 legacy 抓取器完全兼容：`feeds.jsonl`、`comments.jsonl`、`media/`。
 Viewer 无需修改即可浏览 web_scraper 抓取的数据。
+
+**注意**：若已有旧版扁平 `data/` 目录，scraper 启动时会自动迁移到每频道布局（幂等操作）。
 
 ## 停止
 

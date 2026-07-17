@@ -1,6 +1,6 @@
 # 数据格式与查询
 
-## 文件总览
+## 文件总览（多频道布局）
 
 | 文件 | 格式 | 内容 |
 |------|------|------|
@@ -14,6 +14,35 @@
 | `state.json` | JSON | 守护状态快照（feeds hash、触底标记） |
 | `prometheus.lock` | JSON | daemon 周期锁 + 崩溃恢复状态 |
 | `prometheus.log` | 纯文本 | 运行日志（`log/prometheus/` 目录） |
+
+### 每频道目录结构
+
+```
+data/
+├── prometheus.lock              # 进程锁（保持在父级，不随频道目录移动）
+├── 7743321643036658/            # 频道目录（guild_id 作为 key）
+│   ├── feeds.jsonl
+│   ├── comments.jsonl
+│   ├── ids.json
+│   ├── comment_keys.json
+│   ├── comments_fetched_ids.json
+│   ├── media_index.jsonl
+│   ├── media_index.jsonl.bak
+│   ├── media/
+│   │   └── <hash>.jpg
+│   ├── state.json
+│   ├── dead_media.jsonl
+│   └── dead_media_permanent.jsonl
+└── <other_guild_id>/
+    └── ... (相同布局)
+```
+
+### 媒体 URL 变更（Breaking Change）
+
+- **旧版**：`/media/<filename>` → `data/media/<filename>`
+- **新版**：`/media/<guild_id>/<filename>` → `data/<guild_id>/media/<filename>`
+
+Viewer 从 `data/<guild_id>/media/<filename>` 服务媒体文件。
 
 ## feeds.jsonl 字段（每条 80+）
 
@@ -123,3 +152,19 @@ du -sh data/media/
 - 触发条件：10MB
 - 保留文件数：3 个
 - 命名：`log/prometheus/prometheus.log` → `.log.1` → `.log.2` → `.log.3`
+
+## 扁平布局迁移
+
+从旧版扁平 `data/` 迁移到每频道布局：
+
+```bash
+# 自动迁移（启动时检测旧版结构并迁移）
+python -m src.web_scraper
+
+# 手动迁移
+python scripts/migrate_multi_guild.py [--data-dir <path>] [--guild-id <id>]
+```
+
+- 迁移将所有扁平文件 + `media/` 目录移入 `data/<guild_id>/`
+- `prometheus.lock` 保持在父级
+- 幂等操作：已迁移则无副作用

@@ -57,9 +57,9 @@ class Indexer:
     ) -> Iterator[float]:
         conn = init_db(self.db_path)
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("DELETE FROM media")
         conn.execute("DELETE FROM feeds_fts")
         conn.execute("DELETE FROM feeds")
-        conn.execute("DELETE FROM media")
         conn.commit()
         try:
             yield from self._index(conn, feeds_path, media_index_path, start_offset=0)
@@ -73,6 +73,15 @@ class Indexer:
         conn.execute("PRAGMA journal_mode = WAL")
         try:
             start_offset = self._read_last_offset(conn)
+            # Guard: if start_offset is 0 but DB already has indexed data,
+            # treat as already fully indexed (avoid double-indexing).
+            if start_offset <= 0:
+                existing = conn.execute(
+                    "SELECT COUNT(*) FROM feeds"
+                ).fetchone()[0]
+                if existing > 0:
+                    yield 100.0
+                    return
             yield from self._index(
                 conn, feeds_path, media_index_path, start_offset=start_offset
             )
@@ -82,8 +91,15 @@ class Indexer:
     def _load_media_map(
         self, media_index_path: str
     ) -> Dict[str, List[Dict[str, Any]]]:
-        # Missing file → empty map so feeds still index without media.
-        media_map: Dict[str, List[Dict[str, Any]]] = {}
+        """Load media_index.jsonl and deduplicate by (source, url).
+
+        Legacy inject.js wrote extensionless filenames (``abc123``) while
+        web_scraper writes ``abc123.jpg``/``abc123.mp4``.  Both append to the
+        same file, so the same URL can appear multiple times.  We keep only
+        one entry per URL, preferring the one with a file extension so the
+        viewer serves a file that actually exists on disk.
+        """
+        raw_map: Dict[str, List[Dict[str, Any]]] = {}
         try:
             with open(media_index_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -96,7 +112,7 @@ class Indexer:
                         continue
                     source = entry.get("source")
                     if source:
-                        media_map.setdefault(source, []).append(entry)
+                        raw_map.setdefault(source, []).append(entry)
         except FileNotFoundError:
             pass
 
@@ -149,6 +165,7 @@ class Indexer:
         feed_rows: List[tuple] = []
         fts_rows: List[tuple] = []
         media_rows: List[tuple] = []
+        seen_ids: set = set()
 
         with open(feeds_path, "rb") as f:
             f.seek(0, 2)
@@ -175,6 +192,9 @@ class Indexer:
                 feed_id = raw.get("id")
                 if not feed_id:
                     continue
+                if feed_id in seen_ids:
+                    continue
+                seen_ids.add(feed_id)
 
                 title_text = extract_feed_text(raw)
                 author = extract_author(raw)

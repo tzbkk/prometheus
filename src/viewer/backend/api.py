@@ -216,12 +216,11 @@ def handle_stats(db_path: str) -> HandlerResult:
 
 
 def handle_rebuild(db_path: str, data_dir: str) -> HandlerResult:
-    """POST /api/rebuild — trigger incremental index update.
+    """POST /api/rebuild — full index rebuild from scratch.
 
-    Delegates to :meth:`Indexer.build_incremental`, which resumes from the
-    last stored byte offset in the ``meta`` table (idempotent no-op when no
-    new data has been appended). Stores ``indexed_at`` in ``meta`` so that
-    :func:`handle_stats` can report the last rebuild time.
+    Drops all feeds, FTS, and media rows, then re-indexes feeds.jsonl and
+    media_index.jsonl from the beginning. Use when the index is corrupted or
+    after bulk data cleanup.
     """
     feeds_path = os.path.join(str(data_dir), "feeds.jsonl")
     media_index_path = os.path.join(str(data_dir), "media_index.jsonl")
@@ -237,8 +236,7 @@ def handle_rebuild(db_path: str, data_dir: str) -> HandlerResult:
 
     indexer = Indexer(db_path)
     try:
-        # Consume the generator to completion (it yields progress floats).
-        list(indexer.build_incremental(feeds_path, media_index_path))
+        list(indexer.build_all(feeds_path, media_index_path))
     except Exception as exc:
         return 500, {"ok": False, "error": str(exc)}
 

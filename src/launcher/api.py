@@ -1,12 +1,13 @@
 """LauncherApi: HTTP control plane for the Prometheus launcher.
 
 Exposes POST /start /stop /restart /shutdown and GET /status on 127.0.0.1.
+/start, /stop, /restart accept {"target": "qq"|"scraper"} (defaults to "qq").
 All responses use the unified envelope: {"ok": bool, "data": {}, "error": ""}.
 """
 
 import json
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 _DEFAULT_PORT = 9421
 _HEALTH_TIMEOUT_ERROR = "health check timeout 30s"
@@ -88,26 +89,61 @@ class LauncherApi:
                 self._fail("not found", status_code=404)
 
             def _handle_start(self):
-                self._read_body()
+                body = self._read_body()
+                target = body.get("target", "qq")
+
                 status = outer.pm.get_status()
-                if status.get("qq") == "running":
-                    self._ok({"qq": "already running"})
+                if status.get(target) == "running":
+                    self._ok({target: "already running"})
                     return
-                outer.pm.start_qq()
-                self._ok({"qq": "started"})
+
+                # Port 9420 mutual exclusion: QQ and scraper share the port.
+                if target == "scraper" and status.get("qq") == "running":
+                    self._fail("Port 9420 is occupied by QQ. Stop QQ first.")
+                    return
+                if target == "qq" and status.get("scraper") == "running":
+                    self._fail("Port 9420 is occupied by scraper. Stop scraper first.")
+                    return
+
+                method_name = {"qq": "start_qq", "scraper": "start_scraper"}.get(target)
+                if method_name is None:
+                    self._fail("Invalid target: {0}".format(target))
+                    return
+                getattr(outer.pm, method_name)()
+                self._ok({target: "started"})
 
             def _handle_stop(self):
-                self._read_body()
-                outer.pm.stop_qq()
-                self._ok({"qq": "stopped"})
+                body = self._read_body()
+                target = body.get("target", "qq")
+                method_name = {"qq": "stop_qq", "scraper": "stop_scraper"}.get(target)
+                if method_name is None:
+                    self._fail("Invalid target: {0}".format(target))
+                    return
+                getattr(outer.pm, method_name)()
+                self._ok({target: "stopped"})
 
             def _handle_restart(self):
-                self._read_body()
-                success, elapsed_ms = outer.pm.restart_qq()
-                if success:
-                    self._ok({"qq": "restarted", "health_check_ms": elapsed_ms})
-                else:
-                    self._fail(_HEALTH_TIMEOUT_ERROR)
+                body = self._read_body()
+                target = body.get("target", "qq")
+
+                if target == "qq":
+                    success, elapsed_ms = outer.pm.restart_qq()
+                    if success:
+                        self._ok({"qq": "restarted", "health_check_ms": elapsed_ms})
+                    else:
+                        self._fail(_HEALTH_TIMEOUT_ERROR)
+                    return
+
+                # scraper: stop then start (no health check, no port mutual exclusion
+                # at restart time since the target itself owns the port during the cycle).
+                method_map = {"scraper": ("stop_scraper", "start_scraper")}
+                if target not in method_map:
+                    self._fail("Invalid target: {0}".format(target))
+                    return
+                stop_method, start_method = method_map[target]
+                getattr(outer.pm, stop_method)()
+                getattr(outer.pm, start_method)()
+                self._ok({target: "restarted"})
 
             def _handle_shutdown(self):
                 self._read_body()
@@ -136,7 +172,7 @@ class LauncherApi:
         self._handler_cls = Handler
 
     def start(self):
-        self.server = HTTPServer(("127.0.0.1", self._requested_port), self._handler_cls)
+        self.server = ThreadingHTTPServer(("127.0.0.1", self._requested_port), self._handler_cls)
         self.port = self.server.server_address[1]
         self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self._thread.start()
@@ -154,6 +190,6 @@ class LauncherApi:
 
     def serve_forever(self):
         if self.server is None:
-            self.server = HTTPServer(("127.0.0.1", self._requested_port), self._handler_cls)
+            self.server = ThreadingHTTPServer(("127.0.0.1", self._requested_port), self._handler_cls)
             self.port = self.server.server_address[1]
         self.server.serve_forever()

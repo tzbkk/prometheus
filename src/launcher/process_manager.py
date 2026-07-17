@@ -181,6 +181,7 @@ class ProcessManager:
 
     def get_status(self):
         qq_proc = self.processes.get("qq")
+        scraper_proc = self.processes.get("scraper")
         return {
             "qq": self._proc_status("qq", allow_crashed=True),
             "tui": self._proc_status("tui", allow_crashed=False),
@@ -188,6 +189,7 @@ class ProcessManager:
             "scraper": self._proc_status("scraper", allow_crashed=True),
             "restart_counts": dict(self.restart_counts),
             "qq_pid": qq_proc.pid if qq_proc else None,
+            "scraper_pid": scraper_proc.pid if scraper_proc and scraper_proc.poll() is None else None,
         }
 
     def _proc_status(self, name, allow_crashed):

@@ -485,7 +485,7 @@ class TestGetStatus(unittest.TestCase):
         pm = ProcessManager({})
         self.assertEqual(
             set(pm.get_status().keys()),
-            {"qq", "tui", "viewer", "scraper", "restart_counts", "qq_pid"},
+            {"qq", "tui", "viewer", "scraper", "restart_counts", "qq_pid", "scraper_pid"},
         )
 
 

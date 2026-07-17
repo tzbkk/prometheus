@@ -45,15 +45,16 @@ _COMPLEX_CONFIG_KEYS: frozenset[str] = frozenset(
 )
 
 # QQ API field-name fallbacks: the exact keys may vary, so try common aliases.
+_LOG_LIST_KEYS = ("logs", "lines")
 _LOG_SEQ_KEYS = ("seq", "sequence", "id")
 _LOG_LEVEL_KEYS = ("level", "lvl", "severity")
 _LOG_MSG_KEYS = ("msg", "message", "text", "line")
 _LOG_TS_KEYS = ("ts", "timestamp", "time", "date", "iso")
-_STAT_FEED_KEYS = ("feeds", "feed_count", "total_feeds")
-_STAT_COMMENT_KEYS = ("comments", "comment_count", "total_comments")
+_STAT_FEED_KEYS = ("feeds", "feed_count", "total_feeds", "feeds_count")
+_STAT_COMMENT_KEYS = ("comments", "comment_count", "total_comments", "comments_count")
 _STAT_MEDIA_KEYS = ("media_total", "media", "media_files", "media_count", "total_media")
 _STAT_DEAD_KEYS = ("dead", "dead_links", "dead_media", "dead_count")
-_DAEMON_INTERVAL_KEYS = ("daemonInterval", "daemon_interval_ms", "daemon_interval", "interval_ms")
+_DAEMON_INTERVAL_KEYS = ("daemonInterval", "daemon_interval_ms", "daemon_interval", "interval_ms", "scraper_daemon_interval_sec")
 _DAEMON_LAST_KEYS = ("last_scan_ts", "last_daemon_ts", "last_scan", "last_daemon")
 
 
@@ -161,6 +162,7 @@ class PrometheusTab(BaseTab):
         self.launcher_client: LauncherApiClient | None = None
         self._last_log_seq: int = 0
         self._last_qq_pid: int | None = None
+        self._last_scraper_pid: int | None = None
         self._config_loaded: bool = False
         self._auto_scroll_paused: bool = False
         self._last_daemon_time: float | None = None
@@ -176,7 +178,7 @@ class PrometheusTab(BaseTab):
         with Vertical(id="left-panel"):
             yield Static("○ DISCONNECTED", id="process-status")
             yield Static(
-                "[S]tart  [K]ill  [R]estart  [T]rigger  [V]iewer  [Q]uit",
+                "[S]tart  [K]ill  [R]estart  [T]rigger  [Shift+S]craper on/off  [Q]uit",
                 id="controls-hint",
                 markup=False,
             )
@@ -222,7 +224,7 @@ class PrometheusTab(BaseTab):
             self.action_save_config()
 
     def on_key(self, event: events.Key) -> None:
-        """s/k/r/t fire control actions, Ctrl+S saves config, Up/Down toggle log auto-scroll.
+        """s/k/r/t fire control actions, Shift+S toggles scraper, Ctrl+S saves config.
 
         Action keys are suppressed when an Input/Select/Checkbox has focus so
         the user can type freely; Ctrl+S works from anywhere.
@@ -244,6 +246,11 @@ class PrometheusTab(BaseTab):
                 self.app.action_quit()
             return
 
+        if key in ("S", "shift+s"):
+            event.prevent_default()
+            self.action_toggle_scraper()
+            return
+
         if key == "s":
             event.prevent_default()
             self.action_start_qq()
@@ -256,9 +263,6 @@ class PrometheusTab(BaseTab):
         elif key == "t":
             event.prevent_default()
             self.action_trigger_daemon()
-        elif key == "v":
-            event.prevent_default()
-            self.action_toggle_viewer()
         elif key == "up":
             event.prevent_default()
             self._pause_auto_scroll()
@@ -290,18 +294,27 @@ class PrometheusTab(BaseTab):
         stats = data.get("stats")
         if isinstance(stats, dict):
             self._update_stats(stats)
-            if self._last_daemon_time is None:
+            scan_ts = _first(stats, _DAEMON_LAST_KEYS)
+            if isinstance(scan_ts, (int, float)) and scan_ts > 0:
+                self._last_daemon_time = float(scan_ts)
+            elif self._last_daemon_time is None:
                 self._last_daemon_time = time.time()
             self._qq_uptime = stats.get("uptime_seconds")
+
+            # daemon_running is the scraper-only field that distinguishes it from QQ stats.
+            if "daemon_running" in stats:
+                self._set_scraper_status(stats)
 
         config = data.get("config")
         if isinstance(config, dict):
             if not self._config_loaded:
                 self._build_config_editor(config)
                 self._config_loaded = True
-            ims = _first(config, _DAEMON_INTERVAL_KEYS)
-            if isinstance(ims, (int, float)) and ims > 0:
-                self._daemon_interval_s = float(ims) / 1000.0
+            for _ik in _DAEMON_INTERVAL_KEYS:
+                if _ik in config and isinstance(config[_ik], (int, float)) and config[_ik] > 0:
+                    raw = float(config[_ik])
+                    self._daemon_interval_s = raw if "sec" in _ik else raw / 1000.0
+                    break
 
     def _refresh_launcher_status(self) -> None:
         assert self.launcher_client is not None
@@ -341,6 +354,22 @@ class PrometheusTab(BaseTab):
 
     def _update_status(self, status: dict) -> None:
         widget = self.query_one("#process-status", Static)
+
+        scraper_pid = status.get("scraper_pid")
+        if (
+            scraper_pid is not None
+            and self._last_scraper_pid is not None
+            and scraper_pid != self._last_scraper_pid
+        ):
+            self._last_log_seq = 0
+        if scraper_pid is not None:
+            self._last_scraper_pid = scraper_pid
+
+        scraper_state = str(status.get("scraper", "stopped")).lower()
+        if scraper_state == "running":
+            self._render_scraper_launcher_status(status)
+            return
+
         qq_state = str(status.get("qq", "unknown")).lower()
 
         pid = status.get("qq_pid")
@@ -366,6 +395,21 @@ class PrometheusTab(BaseTab):
             uptime_str = "--"
         widget.update(f"[{color}]{marker}[/]  PID:{pid}  up:{uptime_str}")
 
+    def _render_scraper_launcher_status(self, status: dict) -> None:
+        widget = self.query_one("#process-status", Static)
+        marker, color = "● SCRAPER RUNNING", "green"
+        scanned = self._scraped_cycles if hasattr(self, "_scraped_cycles") else "--"
+        widget.update(f"[{color}]{marker}[/]  (launcher-managed)")
+
+    def _set_scraper_status(self, stats: dict) -> None:
+        widget = self.query_one("#process-status", Static)
+        if bool(stats.get("daemon_running", False)):
+            marker, color = "● SCRAPER RUNNING", "green"
+        else:
+            marker, color = "○ SCRAPER IDLE", "yellow"
+        scanned = stats.get("scanned_feeds", "--")
+        widget.update(f"[{color}]{marker}[/]  scanned:{scanned}")
+
     def _update_stats(self, stats: dict) -> None:
         widget = self.query_one("#stats-display", Static)
         feeds = _first(stats, _STAT_FEED_KEYS, "--")
@@ -376,9 +420,9 @@ class PrometheusTab(BaseTab):
             f"Feeds: {feeds} | Comments: {comments} | Media: {media} | Dead: {dead}"
         )
 
-        interval_ms = _first(stats, _DAEMON_INTERVAL_KEYS)
-        if isinstance(interval_ms, (int, float)) and interval_ms > 0:
-            self._daemon_interval_s = float(interval_ms) / 1000.0
+        interval_raw = _first(stats, _DAEMON_INTERVAL_KEYS)
+        if isinstance(interval_raw, (int, float)) and interval_raw > 0:
+            self._daemon_interval_s = float(interval_raw) if interval_raw < 1000 else float(interval_raw) / 1000.0
 
         last_scan = _first(stats, _DAEMON_LAST_KEYS)
         if last_scan is not None:
@@ -533,27 +577,29 @@ class PrometheusTab(BaseTab):
         self.app.notify("Daemon triggered", severity="information")
 
     @work(exclusive=False, thread=True)
-    def action_toggle_viewer(self) -> None:
+    def action_toggle_scraper(self) -> None:
         if self.launcher_client is None:
             return
         try:
-            status = self.launcher_client.viewer_status()
+            status = self.launcher_client.get_status()
         except Exception as exc:
-            self.app.call_from_thread(self.app.notify, f"Viewer status failed: {exc}", severity="error")
+            self.app.call_from_thread(self.app.notify, f"Scraper status failed: {exc}", severity="error")
             return
-        state = status.get("viewer", "stopped") if isinstance(status, dict) else "stopped"
+        running = status.get("scraper") == "running" if isinstance(status, dict) else False
         try:
-            if state == "running":
-                self.launcher_client.stop_viewer()
-                self.app.call_from_thread(self.app.notify, "Viewer stopped", severity="information")
+            if running:
+                self.launcher_client.stop_scraper()
+                msg = "Scraper stop signal sent"
             else:
-                self.launcher_client.start_viewer()
-                self.app.call_from_thread(self.app.notify, "Viewer started at http://127.0.0.1:9422", severity="information")
+                self.launcher_client.start_scraper()
+                msg = "Scraper start signal sent"
         except Exception as exc:
-            self.app.call_from_thread(self.app.notify, f"Viewer toggle failed: {exc}", severity="error")
+            self.app.call_from_thread(self.app.notify, f"Scraper toggle failed: {exc}", severity="error")
+            return
+        self.app.call_from_thread(self.app.notify, msg, severity="information")
 
     def _append_logs(self, logs_data: dict) -> None:
-        lines = logs_data.get("logs")
+        lines = _first(logs_data, _LOG_LIST_KEYS)
         if not isinstance(lines, list) or not lines:
             return
 
@@ -563,6 +609,12 @@ class PrometheusTab(BaseTab):
 
         max_seq = self._last_log_seq
         for entry in lines:
+            if isinstance(entry, str):
+                if keyword and keyword not in entry.lower():
+                    continue
+                log_viewer.write(entry)
+                continue
+
             if not isinstance(entry, dict):
                 continue
 

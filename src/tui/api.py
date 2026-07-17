@@ -54,6 +54,12 @@ class LauncherApiClient:
     def stop_qq(self) -> dict:
         return self.client.launcher_stop()
 
+    def start_scraper(self) -> dict:
+        return self.client.launcher_start_scraper()
+
+    def stop_scraper(self) -> dict:
+        return self.client.launcher_stop_scraper()
+
     def restart_qq(self) -> dict:
         try:
             return self.client.launcher_restart()

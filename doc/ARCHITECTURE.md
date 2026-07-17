@@ -174,6 +174,7 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 ├── API (server.py → api.py)
 │   ├── GET  /api/feeds?page=&size=      分页列表（含首张图片）
 │   ├── GET  /api/feed/:id               帖子详情（原图 URL 匹配、过滤缩略图变体）
+│   ├── GET  /api/feed/:id/comments      评论列表（含嵌套回复、作者、IP、点赞）
 │   ├── GET  /api/search?q=&page=        全文检索（LIKE 匹配 title_text + raw_json）
 │   ├── GET  /api/stats                  feed/media 数量 + DB 大小
 │   └── POST /api/rebuild                手动增量索引
@@ -186,10 +187,13 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 │   ├── feeds      帖子全文 + 作者 + 统计
 │   ├── feeds_fts  FTS5 全文索引（已弃用，搜索改用 LIKE）
 │   ├── media      媒体文件映射（url → local file）
+│   ├── comments   评论（含嵌套回复 parent_id、作者、IP 属地、点赞）
 │   └── meta       last_offset / indexed_at
 ├── 索引器 (indexer.py)
 │   ├── build_all()              全量重建
 │   ├── build_incremental()      增量追加（last_offset 跟踪）
+│   ├── build_comments()         评论全量索引（从 comments.jsonl）
+│   ├── build_comments_incremental() 评论增量索引（last_comment_offset 跟踪）
 │   └── 启动时自动跑一次增量 + 后台轮询（poll_interval=30s）
 └── 前端 (React + Vite + Tailwind + React Query)
     ├── /               FeedListPage（无限滚动、30s 自动刷新）

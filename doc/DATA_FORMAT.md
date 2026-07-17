@@ -31,7 +31,44 @@
 
 ## comments.jsonl 字段
 
-每条记录包含 `_s`（来源标记）、`ts`（时间戳）、`d`（数据体）。`d` 包含 `feedId`、`totalNum`、`vecComment`（评论数组，每条 35+ 子字段）。
+每条记录是一个 JSON 对象，包含 `_s`（来源标记）、`ts`（时间戳）、`d`（数据体）。
+
+### 记录类型
+
+| `_s` | 说明 |
+|------|------|
+| `web_api` | 通过 pd.qq.com API 抓取的评论 |
+| `vue_router` | Vue Router 状态（注入捕获，非评论数据） |
+| `vq_cache` | 缓存数据 |
+
+### web_api 评论结构
+
+`d` 字段包含：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `feedId` | string | 帖子 ID |
+| `totalNum` | int | 评论总数 |
+| `vecComment` | array | 评论列表，每条 35+ 字段 |
+
+`vecComment` 中每条评论的关键字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | string | 评论 ID（`c_` 前缀 = 主评论，`r_` 前缀 = 回复） |
+| `createTime` | int | Unix 时间戳（秒） |
+| `postUser.nick` | string | 评论者昵称 |
+| `postUser.icon.iconUrl` | string | 评论者头像 URL |
+| `richContents.contents[].text_content.text` | string | 评论文本（结构化文本段落） |
+| `richContents.ip_location_province` | string | IP 属地 |
+| `likeInfo.count` | int | 点赞数 |
+| `replyCount` | int | 回复数 |
+| `sequence` | int | 显示顺序 |
+| `vecReply` | array | 嵌套回复（结构同上，无 `vecReply`） |
+
+### Viewer 索引
+
+Viewer 启动时通过 `build_comments_incremental()` 将 `_s == "web_api"` 的记录索引到 SQLite `comments` 表。嵌套回复通过 `parent_id` 字段关联主评论。
 
 ## 常用查询
 

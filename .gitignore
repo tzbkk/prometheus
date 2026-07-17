@@ -5,6 +5,5 @@ qq_patched/
 __pycache__/
 *.pyc
 *.log
-db/*
-!db/.gitkeep
+db/
 .sisyphus/

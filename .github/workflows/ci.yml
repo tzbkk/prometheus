@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check src/ tests/
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pytest
+      - run: pytest tests/ -q
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/viewer/frontend/package-lock.json
+      - working-directory: src/viewer/frontend
+        run: |
+          npm ci
+          npm run build
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+
+      # === Web scraper functional test ===
+      - name: Scrape Takagi channel (single scan)
+        run: python -m src.web_scraper --once
+
+      - name: Verify scraped feeds
+        run: |
+          test -f data/feeds.jsonl
+          FEED_COUNT=$(wc -l < data/feeds.jsonl)
+          echo "Feeds scraped: $FEED_COUNT"
+          [ "$FEED_COUNT" -gt 0 ] || { echo "FAIL: no feeds"; exit 1; }
+          python -c "
+          import json
+          for line in open('data/feeds.jsonl'):
+              f = json.loads(line)
+              assert 'id' in f, f'missing id: {list(f.keys())}'
+          print('All feeds have id')
+          "
+
+      # === Viewer backend functional test ===
+      - name: Start viewer backend
+        run: |
+          mkdir -p db
+          python -m src.viewer.backend.server --port 9422 &
+          echo $! > /tmp/viewer.pid
+          for i in $(seq 1 10); do
+            curl -sf http://127.0.0.1:9422/api/stats && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9422/api/stats || { echo "FAIL: server did not start"; exit 1; }
+
+      - name: Test feeds API
+        run: |
+          curl -s 'http://127.0.0.1:9422/api/feeds?size=5' | python -c "
+          import json, sys
+          feeds = json.load(sys.stdin)
+          assert isinstance(feeds, list), f'expected list, got {type(feeds)}'
+          assert len(feeds) > 0, 'no feeds returned'
+          print(f'GET /api/feeds?size=5 -> {len(feeds)} feeds')
+          "
+
+      - name: Test stats API
+        run: |
+          curl -s http://127.0.0.1:9422/api/stats | python -c "
+          import json, sys
+          stats = json.load(sys.stdin)
+          assert isinstance(stats, dict)
+          print(f'GET /api/stats -> {list(stats.keys())}')
+          "
+
+      - name: Test search API
+        run: |
+          curl -s 'http://127.0.0.1:9422/api/search?q=高木' | python -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          count = len(data) if isinstance(data, list) else 'dict'
+          print(f'GET /api/search?q=高木 -> {count} results')
+          "
+
+      - name: Stop viewer
+        if: always()
+        run: kill $(cat /tmp/viewer.pid) 2>/dev/null || true

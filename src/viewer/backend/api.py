@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.viewer.backend.indexer import Indexer
+from src.web_scraper.urlnorm import normalize_media_url
 
 ResponseBody = Union[List[Any], Dict[str, Any]]
 HandlerResult = Tuple[int, ResponseBody]
@@ -89,6 +90,25 @@ def handle_feeds(db_path: str, query_params: Dict[str, List[str]]) -> HandlerRes
     return 200, [_row_to_dict(r) for r in rows]
 
 
+def handle_feed_comments(db_path: str, feed_id: str) -> HandlerResult:
+    """GET /api/feed/<id>/comments — list comments for a feed."""
+    if not feed_id:
+        return 404, {"error": "not found"}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, create_time, author_nick, author_avatar, "
+            "content_text, ip_location, like_count, reply_count, "
+            "parent_id, sequence "
+            "FROM comments WHERE feed_id = ? ORDER BY sequence",
+            (feed_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return 200, [_row_to_dict(r) for r in rows]
+
+
 def handle_feed_detail(db_path: str, feed_id: str) -> HandlerResult:
     """GET /api/feed/<id> — single feed with parsed raw_json and media list."""
     if not feed_id:
@@ -119,11 +139,11 @@ def handle_feed_detail(db_path: str, feed_id: str) -> HandlerResult:
         for img in raw.get("images", []) or []:
             u = img.get("picUrl")
             if u:
-                original_urls.add(u)
+                original_urls.add(normalize_media_url(u))
         for vid in raw.get("videos", []) or []:
             u = vid.get("videoUrl") or vid.get("picUrl")
             if u:
-                original_urls.add(u)
+                original_urls.add(normalize_media_url(u))
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -215,12 +235,11 @@ def handle_stats(db_path: str) -> HandlerResult:
 
 
 def handle_rebuild(db_path: str, data_dir: str) -> HandlerResult:
-    """POST /api/rebuild — trigger incremental index update.
+    """POST /api/rebuild — full index rebuild from scratch.
 
-    Delegates to :meth:`Indexer.build_incremental`, which resumes from the
-    last stored byte offset in the ``meta`` table (idempotent no-op when no
-    new data has been appended). Stores ``indexed_at`` in ``meta`` so that
-    :func:`handle_stats` can report the last rebuild time.
+    Drops all feeds, FTS, and media rows, then re-indexes feeds.jsonl and
+    media_index.jsonl from the beginning. Use when the index is corrupted or
+    after bulk data cleanup.
     """
     feeds_path = os.path.join(str(data_dir), "feeds.jsonl")
     media_index_path = os.path.join(str(data_dir), "media_index.jsonl")
@@ -236,8 +255,7 @@ def handle_rebuild(db_path: str, data_dir: str) -> HandlerResult:
 
     indexer = Indexer(db_path)
     try:
-        # Consume the generator to completion (it yields progress floats).
-        list(indexer.build_incremental(feeds_path, media_index_path))
+        list(indexer.build_all(feeds_path, media_index_path))
     except Exception as exc:
         return 500, {"ok": False, "error": str(exc)}
 

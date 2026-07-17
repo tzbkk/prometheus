@@ -21,6 +21,7 @@ def _set_pdeathsig():
 _QQ_STOP_TIMEOUT = 10
 _TUI_STOP_TIMEOUT = 5
 _VIEWER_STOP_TIMEOUT = 5
+_SCRAPER_STOP_TIMEOUT = 1
 _HEALTH_POLL_INTERVAL = 1
 _DEFAULT_API_PORT = 9420
 _DEFAULT_LAUNCHER_PORT = 9421
@@ -33,7 +34,7 @@ class ProcessManager:
     def __init__(self, config):
         self.config = config
         self.processes = {}
-        self.restart_counts = {"qq": 0, "tui": 0, "viewer": 0}
+        self.restart_counts = {"qq": 0, "tui": 0, "viewer": 0, "scraper": 0}
         self.project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
@@ -75,6 +76,21 @@ class ProcessManager:
             preexec_fn=_set_pdeathsig,
         )
 
+    def start_scraper(self):
+        env = dict(os.environ)
+        log_dir = os.path.join(self.project_root, "log", "web_scraper")
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = open(os.path.join(log_dir, "scraper.log"), "a")
+        self.processes["scraper"] = subprocess.Popen(
+            [sys.executable, "-m", "src.web_scraper"],
+            cwd=self.project_root,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            preexec_fn=_set_pdeathsig,
+        )
+
     def stop_qq(self):
         self._stop("qq", _QQ_STOP_TIMEOUT)
 
@@ -83,6 +99,9 @@ class ProcessManager:
 
     def stop_viewer(self):
         self._stop("viewer", _VIEWER_STOP_TIMEOUT)
+
+    def stop_scraper(self):
+        self._stop("scraper", _SCRAPER_STOP_TIMEOUT)
 
     def _stop(self, name, timeout):
         proc = self.processes.get(name)
@@ -137,30 +156,40 @@ class ProcessManager:
         elif name == "viewer":
             self.stop_viewer()
             self.start_viewer()
+        elif name == "scraper":
+            self.stop_scraper()
+            self.start_scraper()
         return True
 
     def monitor(self):
-        for name in ("qq", "tui", "viewer"):
+        for name in ("qq", "tui", "viewer", "scraper"):
             proc = self.processes.get(name)
             if proc is None:
                 continue
-            if proc.poll() is not None:
+            rc = proc.poll()
+            if rc is not None:
                 self.processes.pop(name, None)
+                if name == "tui" and rc == 0:
+                    continue
                 self.auto_restart(name)
 
     def graceful_shutdown(self):
+        self.stop_scraper()
         self.stop_qq()
         self.stop_tui()
         self.stop_viewer()
 
     def get_status(self):
         qq_proc = self.processes.get("qq")
+        scraper_proc = self.processes.get("scraper")
         return {
             "qq": self._proc_status("qq", allow_crashed=True),
             "tui": self._proc_status("tui", allow_crashed=False),
             "viewer": self._proc_status("viewer", allow_crashed=True),
+            "scraper": self._proc_status("scraper", allow_crashed=True),
             "restart_counts": dict(self.restart_counts),
             "qq_pid": qq_proc.pid if qq_proc else None,
+            "scraper_pid": scraper_proc.pid if scraper_proc and scraper_proc.poll() is None else None,
         }
 
     def _proc_status(self, name, allow_crashed):

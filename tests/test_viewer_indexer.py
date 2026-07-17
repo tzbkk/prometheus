@@ -305,5 +305,58 @@ class TestBuildIncremental(unittest.TestCase):
         self.assertEqual(count, 3)
 
 
+class TestMediaDedup(unittest.TestCase):
+    """The indexer must deduplicate media_index.jsonl entries by URL.
+
+    Legacy inject.js wrote extensionless filenames (``abc123``); web_scraper
+    writes ``abc123.jpg``.  Both append to the same file, producing duplicate
+    entries for the same URL.  The indexer must keep only one — preferring
+    the extensioned version so the file exists on disk.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = self._tmp.name
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        self.feeds_path = os.path.join(self.tmpdir, "feeds.jsonl")
+        self.media_path = os.path.join(self.tmpdir, "media_index.jsonl")
+
+        _write_jsonl(self.feeds_path, [_make_feed("B_d", texts=["dedup"])])
+        _write_jsonl(self.media_path, [
+            {"url": "http://img/d.jpg", "file": "dddd.jpg", "type": "image",
+             "size": 100, "source": "B_d"},
+            {"url": "http://img/d.jpg", "file": "dddd", "type": "image",
+             "size": 100, "source": "B_d"},
+            {"url": "http://img/e.jpg", "file": "eeee", "type": "image",
+             "size": 200, "source": "B_d"},
+            {"url": "http://img/e.jpg", "file": "eeee", "type": "image",
+             "size": 200, "source": "B_d"},
+        ])
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_duplicate_urls_collapsed(self):
+        indexer = Indexer(self.db_path)
+        list(indexer.build_all(self.feeds_path, self.media_path))
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT url, file FROM media WHERE feed_id = 'B_d' ORDER BY url"
+        ).fetchall()
+        conn.close()
+        self.assertEqual(len(rows), 2)
+
+    def test_extension_preferred(self):
+        indexer = Indexer(self.db_path)
+        list(indexer.build_all(self.feeds_path, self.media_path))
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT file FROM media WHERE feed_id = 'B_d' AND url = 'http://img/d.jpg'"
+        ).fetchone()
+        conn.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], "dddd.jpg")
+
+
 if __name__ == "__main__":
     unittest.main()

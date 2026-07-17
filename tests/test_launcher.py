@@ -23,7 +23,7 @@ class TestProcessManagerInit(unittest.TestCase):
         pm = ProcessManager({"launcher_port": 9421, "max_restarts": 5})
         self.assertEqual(pm.config["launcher_port"], 9421)
         self.assertEqual(pm.processes, {})
-        self.assertEqual(pm.restart_counts, {"qq": 0, "tui": 0, "viewer": 0})
+        self.assertEqual(pm.restart_counts, {"qq": 0, "tui": 0, "viewer": 0, "scraper": 0})
 
     def test_init_project_root_is_parent_of_src(self):
         pm = ProcessManager({})
@@ -432,7 +432,7 @@ class TestGetStatus(unittest.TestCase):
         self.assertEqual(status["qq"], "stopped")
         self.assertEqual(status["tui"], "stopped")
         self.assertEqual(status["viewer"], "stopped")
-        self.assertEqual(status["restart_counts"], {"qq": 0, "tui": 0, "viewer": 0})
+        self.assertEqual(status["restart_counts"], {"qq": 0, "tui": 0, "viewer": 0, "scraper": 0})
 
     def test_status_qq_running(self):
         pm = ProcessManager({})
@@ -478,14 +478,14 @@ class TestGetStatus(unittest.TestCase):
 
     def test_status_includes_restart_counts(self):
         pm = ProcessManager({})
-        pm.restart_counts = {"qq": 3, "tui": 1, "viewer": 2}
-        self.assertEqual(pm.get_status()["restart_counts"], {"qq": 3, "tui": 1, "viewer": 2})
+        pm.restart_counts = {"qq": 3, "tui": 1, "viewer": 2, "scraper": 0}
+        self.assertEqual(pm.get_status()["restart_counts"], {"qq": 3, "tui": 1, "viewer": 2, "scraper": 0})
 
     def test_status_keys(self):
         pm = ProcessManager({})
         self.assertEqual(
             set(pm.get_status().keys()),
-            {"qq", "tui", "viewer", "restart_counts", "qq_pid"},
+            {"qq", "tui", "viewer", "scraper", "restart_counts", "qq_pid", "scraper_pid"},
         )
 
 

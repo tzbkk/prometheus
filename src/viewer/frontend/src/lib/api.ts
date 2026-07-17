@@ -44,6 +44,20 @@ export interface FeedDetail extends Feed {
   media?: Media[]
 }
 
+/** A single comment, as returned by GET /api/feed/<id>/comments. */
+export interface Comment {
+  id: string
+  create_time: number | null
+  author_nick: string | null
+  author_avatar: string | null
+  content_text: string | null
+  ip_location: string | null
+  like_count: number
+  reply_count: number
+  parent_id: string | null
+  sequence: number | null
+}
+
 /** Stats summary, as returned by GET /api/stats. */
 export interface Stats {
   total_feeds: number
@@ -100,6 +114,11 @@ export async function fetchFeeds(
  */
 export async function fetchFeedDetail(feedId: string): Promise<FeedDetail> {
   return request<FeedDetail>(`/api/feed/${encodeURIComponent(feedId)}`)
+}
+
+/** GET /api/feed/{feedId}/comments → list of comments with nested replies. */
+export async function fetchComments(feedId: string): Promise<Comment[]> {
+  return request<Comment[]>(`/api/feed/${encodeURIComponent(feedId)}/comments`)
 }
 
 /**

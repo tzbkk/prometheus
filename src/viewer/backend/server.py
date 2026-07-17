@@ -19,6 +19,7 @@ from typing import Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from src.viewer.backend.api import (
+    handle_feed_comments,
     handle_feed_detail,
     handle_feeds,
     handle_rebuild,
@@ -172,8 +173,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if path == "/api/feeds":
             status, body = handle_feeds(db_path, query_params)
         elif path.startswith("/api/feed/"):
-            feed_id = unquote(path[len("/api/feed/"):])
-            status, body = handle_feed_detail(db_path, feed_id)
+            rest = unquote(path[len("/api/feed/"):])
+            if rest.endswith("/comments"):
+                feed_id = rest[:-len("/comments")]
+                status, body = handle_feed_comments(db_path, feed_id)
+            else:
+                status, body = handle_feed_detail(db_path, rest)
         elif path == "/api/search":
             status, body = handle_search(db_path, query_params)
         elif path == "/api/stats":
@@ -454,9 +459,13 @@ def main(argv=None):
 
     feeds_path = os.path.join(data_dir, "feeds.jsonl")
     media_index_path = os.path.join(data_dir, "media_index.jsonl")
+    comments_path = os.path.join(data_dir, "comments.jsonl")
     indexer = Indexer(db_path)
     for _ in indexer.build_incremental(feeds_path, media_index_path):
         pass
+    if os.path.exists(comments_path):
+        for _ in indexer.build_comments_incremental(comments_path):
+            pass
 
     poll_interval = int(cfg.get("poll_interval", 30))
     poll_stop: threading.Event | None = None
@@ -468,6 +477,9 @@ def main(argv=None):
             while not poll_stop.wait(poll_interval):
                 for _ in indexer.build_incremental(feeds_path, media_index_path):
                     pass
+                if os.path.exists(comments_path):
+                    for _ in indexer.build_comments_incremental(comments_path):
+                        pass
 
         poll_thread = threading.Thread(target=_poll_index, daemon=True)
         poll_thread.start()

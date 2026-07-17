@@ -35,7 +35,7 @@
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `channel_id` | — | 目标频道 guild_id（必填） |
+| `channel_id` | — | 目标频道 guild_id（必填）。获取：打开 `pd.qq.com` → 进入目标频道 → 地址栏 `pd.qq.com/g/{id}` 中的数字 |
 | `channel_name` | — | 频道显示名（用于自动点击匹配） |
 | `scroll_max_iterations` | 50000 | 最大滚动次数上限 |
 | `daemon_mode` | true | 守护模式 |
@@ -82,7 +82,26 @@
 }
 ```
 
-| 参数 | 说明 |
+ | 参数 | 说明 |
 |------|------|
 | `poll_interval` | TUI 向 QQ/launcher API 轮询数据的间隔（秒） |
 | `api_version` | 预期 QQ API 版本，不匹配时 TUI 显示警告横幅 |
+
+## Web Scraper 配置
+
+以下配置项在 `conf/prometheus.conf.json` 中设置：
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `guild_number` | string | `Takagi3channel` | 频道唯一标识，用于 GetFeedComments API |
+| `scraper_max_workers` | int | `10` | ThreadPoolExecutor 并发线程数 |
+| `scraper_daemon_interval_sec` | int | `120` | 守护模式扫描间隔（秒） |
+| `scraper_api_port` | int | `9420` | Scraper HTTP API 端口（与 QQ legacy 互斥） |
+
+### guild_number 获取方式
+
+1. 打开 https://pd.qq.com
+2. 进入目标频道
+3. 打开浏览器开发者工具 → Network
+4. 查找 GetFeedComments 请求
+5. 在请求体中找到 `channelSign.guild_number` 的值

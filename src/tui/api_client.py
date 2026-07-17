@@ -82,6 +82,14 @@ class ApiClient:
         """POST /stop → returns data dict"""
         return self._request('POST', self.host, self.launcher_port, '/stop')
 
+    def launcher_start_scraper(self):
+        """POST /start with target=scraper → returns data dict"""
+        return self._request('POST', self.host, self.launcher_port, '/start', body={"target": "scraper"})
+
+    def launcher_stop_scraper(self):
+        """POST /stop with target=scraper → returns data dict"""
+        return self._request('POST', self.host, self.launcher_port, '/stop', body={"target": "scraper"})
+
     def launcher_restart(self):
         """POST /restart → returns data dict (may block up to 30s)"""
         return self._request('POST', self.host, self.launcher_port, '/restart')

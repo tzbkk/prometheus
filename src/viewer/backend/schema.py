@@ -1,4 +1,4 @@
-"""SQLite schema for the viewer backend (feeds / feeds_fts / media / meta)."""
+"""SQLite schema for the viewer backend (feeds / feeds_fts / media / comments / meta)."""
 
 import sqlite3
 
@@ -42,6 +42,22 @@ CREATE TABLE IF NOT EXISTS media (
 )
 """
 
+_CREATE_COMMENTS = """
+CREATE TABLE IF NOT EXISTS comments (
+    id             TEXT PRIMARY KEY,
+    feed_id        TEXT NOT NULL,
+    parent_id      TEXT,
+    create_time    INTEGER,
+    author_nick    TEXT,
+    author_avatar  TEXT,
+    content_text   TEXT,
+    ip_location    TEXT,
+    like_count     INTEGER DEFAULT 0,
+    reply_count    INTEGER DEFAULT 0,
+    sequence       INTEGER
+)
+"""
+
 _CREATE_META = """
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
@@ -55,6 +71,10 @@ _CREATE_INDEX_FEEDS_CREATE_TIME = (
 
 _CREATE_INDEX_MEDIA_FEED_ID = (
     "CREATE INDEX IF NOT EXISTS idx_media_feed_id ON media(feed_id)"
+)
+
+_CREATE_INDEX_COMMENTS_FEED_ID = (
+    "CREATE INDEX IF NOT EXISTS idx_comments_feed_id ON comments(feed_id)"
 )
 
 
@@ -84,6 +104,7 @@ def init_db(db_path: str) -> sqlite3.Connection:
 
     conn.execute(_CREATE_FEEDS)
     conn.execute(_CREATE_MEDIA)
+    conn.execute(_CREATE_COMMENTS)
     conn.execute(_CREATE_META)
 
     if fts5_available(conn):
@@ -91,6 +112,7 @@ def init_db(db_path: str) -> sqlite3.Connection:
 
     conn.execute(_CREATE_INDEX_FEEDS_CREATE_TIME)
     conn.execute(_CREATE_INDEX_MEDIA_FEED_ID)
+    conn.execute(_CREATE_INDEX_COMMENTS_FEED_ID)
 
     conn.commit()
     return conn

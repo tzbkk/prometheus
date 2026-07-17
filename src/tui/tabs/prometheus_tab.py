@@ -162,6 +162,7 @@ class PrometheusTab(BaseTab):
         self.launcher_client: LauncherApiClient | None = None
         self._last_log_seq: int = 0
         self._last_qq_pid: int | None = None
+        self._last_scraper_pid: int | None = None
         self._config_loaded: bool = False
         self._auto_scroll_paused: bool = False
         self._last_daemon_time: float | None = None
@@ -245,7 +246,7 @@ class PrometheusTab(BaseTab):
                 self.app.action_quit()
             return
 
-        if key == "S":
+        if key in ("S", "shift+s"):
             event.prevent_default()
             self.action_toggle_scraper()
             return
@@ -353,6 +354,16 @@ class PrometheusTab(BaseTab):
 
     def _update_status(self, status: dict) -> None:
         widget = self.query_one("#process-status", Static)
+
+        scraper_pid = status.get("scraper_pid")
+        if (
+            scraper_pid is not None
+            and self._last_scraper_pid is not None
+            and scraper_pid != self._last_scraper_pid
+        ):
+            self._last_log_seq = 0
+        if scraper_pid is not None:
+            self._last_scraper_pid = scraper_pid
 
         scraper_state = str(status.get("scraper", "stopped")).lower()
         if scraper_state == "running":

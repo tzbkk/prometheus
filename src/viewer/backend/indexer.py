@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional
 
+from src.web_scraper.urlnorm import normalize_media_url
+
 from src.viewer.backend.schema import init_db
 
 _BATCH_SIZE = 500
@@ -97,6 +99,19 @@ class Indexer:
                         media_map.setdefault(source, []).append(entry)
         except FileNotFoundError:
             pass
+
+        media_map: Dict[str, List[Dict[str, Any]]] = {}
+        for source, entries in raw_map.items():
+            best_by_url: Dict[str, Dict[str, Any]] = {}
+            for entry in entries:
+                norm_url = normalize_media_url(entry.get("url", ""))
+                fn = entry.get("file", "")
+                existing = best_by_url.get(norm_url)
+                if existing is None:
+                    best_by_url[norm_url] = entry
+                elif "." in fn and "." not in existing.get("file", ""):
+                    best_by_url[norm_url] = entry
+            media_map[source] = list(best_by_url.values())
         return media_map
 
     def _read_last_offset(self, conn: sqlite3.Connection) -> int:

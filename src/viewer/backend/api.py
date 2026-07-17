@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.viewer.backend.indexer import Indexer
+from src.web_scraper.urlnorm import normalize_media_url
 
 ResponseBody = Union[List[Any], Dict[str, Any]]
 HandlerResult = Tuple[int, ResponseBody]
@@ -119,11 +120,11 @@ def handle_feed_detail(db_path: str, feed_id: str) -> HandlerResult:
         for img in raw.get("images", []) or []:
             u = img.get("picUrl")
             if u:
-                original_urls.add(u)
+                original_urls.add(normalize_media_url(u))
         for vid in raw.get("videos", []) or []:
             u = vid.get("videoUrl") or vid.get("picUrl")
             if u:
-                original_urls.add(u)
+                original_urls.add(normalize_media_url(u))
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

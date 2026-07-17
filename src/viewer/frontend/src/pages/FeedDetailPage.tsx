@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useFeedDetail } from '@/hooks/useFeedDetail'
+import { useComments } from '@/hooks/useComments'
 import { MediaGrid } from '@/components/MediaGrid'
+import { CommentList, CommentListSkeleton } from '@/components/CommentList'
 
 interface FeedDetailPageProps {
   id: string
@@ -112,7 +114,34 @@ function FeedDetailContent({ feed }: FeedDetailContentProps) {
           <p className="mt-4 text-sm text-gray-400">暂无内容</p>
         )}
       </article>
+
+      <CommentSection feedId={feed.id} />
     </div>
+  )
+}
+
+function CommentSection({ feedId }: { feedId: string }) {
+  const { data, isLoading } = useComments(feedId)
+  const count = data?.length ?? 0
+
+  return (
+    <section className="mt-6">
+      <h2 className="mb-3 flex items-center gap-2 text-base font-medium text-gray-800">
+        评论
+        {count > 0 && (
+          <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600">
+            {count}
+          </span>
+        )}
+      </h2>
+      {isLoading ? (
+        <CommentListSkeleton />
+      ) : !data || data.length === 0 ? (
+        <p className="py-6 text-center text-sm text-gray-400">暂无评论</p>
+      ) : (
+        <CommentList comments={data} />
+      )}
+    </section>
   )
 }
 

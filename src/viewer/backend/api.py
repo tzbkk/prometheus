@@ -90,6 +90,25 @@ def handle_feeds(db_path: str, query_params: Dict[str, List[str]]) -> HandlerRes
     return 200, [_row_to_dict(r) for r in rows]
 
 
+def handle_feed_comments(db_path: str, feed_id: str) -> HandlerResult:
+    """GET /api/feed/<id>/comments — list comments for a feed."""
+    if not feed_id:
+        return 404, {"error": "not found"}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, create_time, author_nick, author_avatar, "
+            "content_text, ip_location, like_count, reply_count, "
+            "parent_id, sequence "
+            "FROM comments WHERE feed_id = ? ORDER BY sequence",
+            (feed_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return 200, [_row_to_dict(r) for r in rows]
+
+
 def handle_feed_detail(db_path: str, feed_id: str) -> HandlerResult:
     """GET /api/feed/<id> — single feed with parsed raw_json and media list."""
     if not feed_id:

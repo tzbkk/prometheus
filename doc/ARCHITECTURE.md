@@ -114,27 +114,28 @@ GNOME Mutter / Wayland 在窗口遮挡时不发送 `wl_surface.frame` 回调 →
 | `/start` | POST | 仅启动 QQ（不碰 TUI） |
 | `/stop` | POST | 停止 QQ |
 | `/restart` | POST | 同步重启 QQ（含健康检查） |
-| `/status` | GET | 进程状态 + 重启计数 |
+| `/status` | GET | 进程状态 + 重启计数 + `qq_pid`/`scraper_pid` |
 | `/shutdown` | POST | 关闭所有进程 |
 
 ## Launcher
 
-Python 标准库进程管理器（`src/launcher/`），零额外依赖：
+Python 标准库进程管理器（`src/launcher/`），依赖 prompt_toolkit 提供交互 shell：
 
 - **进程隔离**：QQ 使用 `start_new_session=True`（独立 session，`stdin=DEVNULL` + `stdout=logfile` 不碰终端）；TUI 与 launcher 共享 session（接收 SIGWINCH 以支持终端 resize）
 - **PR_SET_PDEATHSIG**：子进程 fork 后调 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，launcher 死了（含 `kill -9`）内核自动杀子进程
-- **TUI 独占终端**：launcher 主线程 `proc.wait()` 阻塞等待 TUI 退出，不碰 stdin
-- **终端恢复**：TUI 退出后 → `reset`（不捕获输出，让转义序列到终端）→ `tcflush(TCIFLUSH)` 清残留输入
-- **REPL**：`input("> ")` 标准行缓冲，有回显和 readline 支持
+- **后台 monitor 线程**：每秒调 `pm.monitor()` 检测进程崩溃并自动重启（`max_restarts=5`）；TUI 干净退出（rc=0）不触发重启
+- **TUI 独占终端**：shell 主线程 `proc.wait()` 阻塞等待 TUI 退出，不碰 stdin
+- **终端恢复**：TUI 退出后 → `reset` → `tcflush(TCIFLUSH)` 清残留输入
+- **子命令 shell**：`prompt_toolkit` PromptSession + WordCompleter + bottom_toolbar 实时状态栏；CommandParser 纯函数解析，Dispatcher 加锁调用 ProcessManager
 
 ## TUI 控制台
 
 基于 textual 框架（`src/tui/`），`TEXTUAL_DISABLE_KITTY_KEY=1` 禁用 Kitty keyboard protocol（避免退出时转义序列泄漏到 stdin）：
 
 - **两个标签页**：Prometheus（状态/控制/日志/配置/倒计时）+ TUI（设置/帮助）
-- **退出机制**：`action_quit()` 调 `driver.stop_application_mode()`（textual 自己的终端恢复）→ `os._exit(0)`（不等 event loop / worker 线程）
+- **退出机制**：`on_key` 拦截 'q' 调 `self.exit()`（textual 正常退出流程，自动恢复终端）
 - **DISCONNECTED 横幅**：QQ API 不可用时显示，恢复后自动消失
-- **PID 变化检测**：QQ restart 后 `_last_log_seq` 重置为 0，确保新日志能显示
+- **PID 变化检测**：QQ 或 scraper restart 后 `_last_log_seq` 重置为 0，确保新日志能显示
 - **@work(thread=True)**：kill/restart HTTP 操作在后台线程，不阻塞事件循环
 
 ## 日志系统
@@ -142,7 +143,7 @@ Python 标准库进程管理器（`src/launcher/`），零额外依赖：
 四级日志（ERROR/WARN/INFO/DEBUG）：
 
 - `log_level` 配置控制（默认 INFO）
-- 内存环形缓冲（`log_buffer_lines`，默认 500）
+- 内存环形缓冲（`log_buffer_lines`，默认 500），按 `entry.seq` 过滤（非数组索引）
 - 文件双写 + 10MB 自动轮转（保留 3 个旧文件）
 - 文件格式：`[LEVEL] ISO_TIMESTAMP message`
 - 日志目录：`log/prometheus/prometheus.log`
@@ -221,7 +222,7 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 
 | 方式 | 操作 | 说明 |
 |------|------|------|
-| launcher REPL | `v` | 启动/停止 Viewer |
+| launcher shell | `start viewer` / `stop viewer` | 启动/停止 Viewer |
 | TUI Viewer 标签页 | `v` | 开关 Viewer |
 | launcher API | `POST /webapp/start` | 启动 |
 | launcher API | `POST /webapp/stop` | 停止 |
@@ -232,3 +233,76 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 - **LIKE 代替 FTS5**：FTS5 unicode61 不分词 CJK，中文子串搜索（如"高木"）无结果。LIKE 在 8745 条规模上性能足够。
 - **缩略图过滤**：QQ 每张图有 `picUrl`（原图）+ `vecImageUrl[]`（3-4 级缩略图）。详情 API 仅返回匹配 `images[].picUrl` 的本地文件。
 - **头像过滤**：作者头像 URL（`qlogo.cn`）被媒体下载器捕获，feed 列表缩略图和详情媒体列表均过滤排除。
+
+## Web Scraper 架构（prometheus-neo）
+
+```
+web_scraper (Python)
+├── client.py — QQWebClient: pd.qq.com HTTP API (urllib stdlib)
+│   ├── GetGuildFeeds (service_type=12) — 分页拉取帖子
+│   ├── GetFeedComments (service_type=5) — 评论
+│   └── Cookie session + exponential backoff retry
+├── feeds.py — FeedsScraper: 分页循环 + guild_id 过滤
+├── comments.py — CommentsScraper: ThreadPoolExecutor 并发
+├── media.py — MediaDownloader: SHA256+扩展名命名 + 原子写入
+│   ├── urlnorm.py — 剥离 QQ CDN volatile 参数 (dis_k, dis_t) 后 hash
+│   ├── 加载 media_index.jsonl → _seen 去重集合 (normalized URL)
+│   ├── 加载 dead_media_permanent.jsonl → _dead 跳过集合
+│   └── 零字节文件自动重下
+├── store.py — Store: 线程安全 + 去重 (ids.json + comment_keys.json)
+│   └── comments_fetched_ids.json — feed_id→last_count 追踪评论增长
+├── lock.py — Lock: 进程锁 + stale PID 检测 + 崩溃恢复
+├── api_server.py — APIServer: HTTP API (ThreadingHTTPServer, health/stats/config/logs)
+│   └── trigger-daemon 异步执行（后台线程），daemon_running 时拒绝重复触发
+├── daemon.py — Daemon: 定期扫描 + 分页回填 + 评论增长检测
+│   ├── 每个 cycle 从最新页往回翻 (最多 50 页), 遇已抓 feed 停
+│   ├── 对比 live commentCount vs stored → 涨了就重新抓评论
+│   ├── 每 cycle 轮转回查 50 个旧帖 (3 线程, 防止 QQ API 限流)
+│   └── 每个 cycle 写 state.json (SHA256 hash of feeds.jsonl)
+└── __main__.py — 入口: 装配组件 + 日志缓冲 + 进程锁
+    HTTP API: 127.0.0.1:9420 (与 QQ legacy 互斥)
+```
+
+### API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | `{"ok":true,"data":{"status":"ok","scraper":"running"}}` |
+| `/stats` | GET | feeds/comments/media 计数 + daemon 状态 |
+| `/logs` | GET | 日志缓冲（`?since=N&max=M`，按 `entry.seq > N` 过滤） |
+| `/config` | GET/PUT | 查看/修改配置 |
+| `/action/trigger-daemon` | POST | 手动触发扫描（异步，立即返回） |
+
+### 进程安全
+
+- **进程锁** (`prometheus.lock`): acquire 时写 `dirty:true` + PID, release 时 `dirty:false`
+- **stale PID 检测**: 死 PID 的 lock 自动覆盖, 活 PID 的 lock 阻断双开
+- **崩溃恢复**: 启动时发现 dirty lock → log warning
+- **stdout 重定向**: launcher 启动 scraper 时重定向到 `log/web_scraper/scraper.log`, 不污染 TUI
+
+### 媒体下载
+
+- **命名**: `SHA256(normalized_url)[:16] + ".jpg"` / `".mp4"` (与 legacy 完全一致)
+- **URL 正则化**: QQ 视频 CDN 的 `dis_k`/`dis_t` 鉴权参数每次请求都变 → 剥离后 hash 才稳定, 防止同一视频反复下载
+- **去重**: 启动时加载 `media_index.jsonl` → `_seen` 集合, stats 立即显示完整数量
+- **零字节重下**: `filepath.stat().st_size > 0` 检查, 空文件自动重新下载
+- **永久放弃列表**: 3 次重试失败的 URL 写入 `dead_media_permanent.jsonl`, 永不再试
+- **捡漏**: daemon 从 API 获取 live feed (含 legacy 未捕获的视频 URL), 发现文件不在磁盘就下
+
+### 评论增长检测
+
+1. **最新页**: `get_feeds(7,"")` 返回 live `commentCount` → 对比 `comments_fetched_ids.json` 记录的上次数 → 涨了就重抓
+2. **旧帖**: 每 cycle 轮转回查 50 个 (3 线程), 全量覆盖 ~4 小时 → batch 调 GetFeedComments → Store 去重兜底
+
+### 与 Legacy 的关系
+
+| 特性 | Legacy (inject.js) | Web Scraper |
+|------|-------------------|-------------|
+| 依赖 | QQ AppImage | 无（纯 HTTP） |
+| 数据格式 | feeds.jsonl | 相同 |
+| 评论抓取 | 滚动捕获 (仅 2/307 真实) | API 分页 (5730 真实) |
+| 媒体下载 | QQ 缓存复制 | CDN 下载 + 磁盘对账 |
+| 进程锁 | lock.js (dirty+PID) | lock.py (dirty+PID) |
+| 状态文件 | state.json | 相同 |
+| HTTP API | 9420 | 9420（互斥） |
+| 稳定性 | 依赖 QQ 版本 | web API 可能随时停用 |

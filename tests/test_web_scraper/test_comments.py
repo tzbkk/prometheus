@@ -5,6 +5,7 @@ All tests use mocked client+store — no network, no filesystem writes.
 
 import os
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -210,3 +211,31 @@ def test_scrape_all_accepts_tuples():
     assert result == 1
     feed_ids_called = [c.args[0] for c in client.get_feed_comments.call_args_list]
     assert feed_ids_called == ["B_50"]
+
+
+def test_comments_scraper_uses_shared_semaphore():
+    """When a shared semaphore is provided, it is acquired during API calls."""
+    sem = MagicMock(spec=threading.Semaphore)
+
+    client = _make_client({"B_60": [([_comment("c1")], 1, "")]})
+    store = _make_store()
+    scraper = CommentsScraper(client, store, "guild123", shared_semaphore=sem)
+
+    result = scraper.scrape_feed_comments("B_60")
+
+    assert result == 1
+    sem.__enter__.assert_called_once()
+    sem.__exit__.assert_called_once()
+
+
+def test_comments_scraper_without_semaphore_backward_compat():
+    """Default behaviour (shared_semaphore=None) must remain unchanged."""
+    client = _make_client({"B_70": [([_comment("c1")], 1, "")]})
+    store = _make_store()
+    scraper = CommentsScraper(client, store, "guild123")
+
+    assert scraper._semaphore is None
+    result = scraper.scrape_feed_comments("B_70")
+
+    assert result == 1
+    assert client.get_feed_comments.call_count == 1

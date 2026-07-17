@@ -7,6 +7,7 @@ Uses ThreadPoolExecutor for concurrent downloads.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -25,17 +26,28 @@ logger = logging.getLogger(__name__)
 class MediaDownloader:
     """Concurrent media downloader with SHA256-based dedup and JSONL index."""
 
-    def __init__(self, data_dir, max_workers: int = 10):
+    def __init__(
+        self,
+        data_dir,
+        max_workers: int = 10,
+        shared_semaphore: threading.Semaphore | None = None,
+    ):
         """Initialize downloader with data directory.
 
         Args:
             data_dir: Path to data directory. A ``media/`` subdir will be created.
             max_workers: Thread pool size for concurrent downloads.
+            shared_semaphore: Optional ``threading.Semaphore`` used to bound
+                GLOBAL HTTP concurrency across all guild contexts (plan §2.1a / I1).
+                Held ONLY around the ``urllib.request.urlopen`` network call,
+                not during disk writes / index updates. ``None`` (default)
+                preserves single-guild behavior unchanged.
         """
         self.data_dir = Path(data_dir)
         self.media_dir = self.data_dir / "media"
         self.media_dir.mkdir(parents=True, exist_ok=True)
         self.max_workers = max_workers
+        self._semaphore = shared_semaphore
         self._lock = threading.Lock()
         self._index_path = self.data_dir / "media_index.jsonl"
         self._dead_path = self.data_dir / "dead_media_permanent.jsonl"
@@ -61,6 +73,11 @@ class MediaDownloader:
                 except (json.JSONDecodeError, TypeError):
                     pass
             logger.info("Loaded %d dead media URLs", len(self._dead))
+
+    def _sem_ctx(self):
+        if self._semaphore is None:
+            return contextlib.nullcontext()
+        return self._semaphore
 
     def download_feed_media(self, feed_dict) -> int:
         """Download all media referenced by a feed dict.
@@ -136,8 +153,9 @@ class MediaDownloader:
                 req = urllib.request.Request(
                     url, headers={"User-Agent": "Mozilla/5.0"}
                 )
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    data = resp.read()
+                with self._sem_ctx():
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        data = resp.read()
                 # Atomic write: temp file + os.replace
                 tmp = filepath.with_suffix(filepath.suffix + ".tmp")
                 tmp.write_bytes(data)

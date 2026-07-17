@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Feed } from '@/lib/api'
+import { mediaUrl, type Feed } from '@/lib/api'
 
 interface FeedCardProps {
   feed: Feed
@@ -57,7 +57,7 @@ export function FeedCard({ feed }: FeedCardProps) {
       {hasImage && (
         <img
           loading="lazy"
-          src={`/media/${feed.first_media}`}
+          src={mediaUrl(feed.guild_id, feed.first_media) ?? ''}
           alt={feed.title_text ?? ''}
           className="mt-3 h-48 w-full rounded object-cover"
         />

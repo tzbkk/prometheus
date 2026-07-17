@@ -14,6 +14,8 @@
 /** A single feed row, as returned by list endpoints (no raw_json). */
 export interface Feed {
   id: string
+  /** Numeric QQ guild/community id; scopes media URLs (G7: /media/<guild_id>/<file>). */
+  guild_id: string
   create_time: number | null
   title_text: string | null
   author_nick: string | null
@@ -25,6 +27,14 @@ export interface Feed {
   video_count: number
   /** Thumbnail filename from the list endpoint's first_media subquery. */
   first_media?: string | null
+}
+
+/** A guild row, as returned by GET /api/guilds. */
+export interface Guild {
+  guild_id: string
+  guild_number: string | null
+  name: string | null
+  feeds: number
 }
 
 /** A single media row, as returned in FeedDetail.media. */
@@ -98,14 +108,17 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /**
- * GET /api/feeds?page={page}&size={size} → list of feeds, newest first.
- * Returns an empty array on out-of-range pages.
+ * GET /api/feeds?page={page}&size={size}&guild={guildId} → list of feeds, newest first.
+ * Returns an empty array on out-of-range pages. Pass `guildId` null/undefined
+ * for the cross-guild view (no `guild` query param sent).
  */
 export async function fetchFeeds(
   page = 1,
   size = DEFAULT_PAGE_SIZE,
+  guildId?: string | null,
 ): Promise<Feed[]> {
   const params = new URLSearchParams({ page: String(page), size: String(size) })
+  if (guildId) params.set('guild', guildId)
   return request<Feed[]>(`/api/feeds?${params.toString()}`)
 }
 
@@ -121,20 +134,43 @@ export async function fetchComments(feedId: string): Promise<Comment[]> {
   return request<Comment[]>(`/api/feed/${encodeURIComponent(feedId)}/comments`)
 }
 
+/** GET /api/guilds → all known guilds with feed counts, ordered by feeds desc. */
+export async function fetchGuilds(): Promise<Guild[]> {
+  return request<Guild[]>('/api/guilds')
+}
+
 /**
- * GET /api/search?q={query}&page={page}&size={size} → matching feeds.
- * Returns an empty array when no results or out-of-range page.
+ * Build a guild-scoped media URL. Backend serves `/media/<guild_id>/<file>`
+ * (G7 — exactly two path segments). Returns null when there is no filename.
+ * When `guildId` is missing the segment is empty, preserving legacy paths
+ * for any pre-migration data still served from the flat layout.
+ */
+export function mediaUrl(
+  guildId: string | null | undefined,
+  file: string | null | undefined,
+): string | null {
+  if (!file) return null
+  const gid = guildId || ''
+  return `/media/${gid}/${file}`
+}
+
+/**
+ * GET /api/search?q={query}&page={page}&size={size}&guild={guildId} → matching feeds.
+ * Returns an empty array when no results or out-of-range page. Pass `guildId`
+ * null/undefined for the cross-guild view.
  */
 export async function searchFeeds(
   query: string,
   page = 1,
   size = DEFAULT_PAGE_SIZE,
+  guildId?: string | null,
 ): Promise<Feed[]> {
   const params = new URLSearchParams({
     q: query,
     page: String(page),
     size: String(size),
   })
+  if (guildId) params.set('guild', guildId)
   return request<Feed[]>(`/api/search?${params.toString()}`)
 }
 

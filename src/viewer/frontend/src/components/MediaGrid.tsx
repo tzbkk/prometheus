@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import type { Media } from '@/lib/api'
+import { mediaUrl, type Media } from '@/lib/api'
 
 interface MediaGridProps {
   media: Media[]
+  guildId: string
 }
 
-export function MediaGrid({ media }: MediaGridProps) {
+export function MediaGrid({ media, guildId }: MediaGridProps) {
   const [lightbox, setLightbox] = useState<string | null>(null)
 
   if (media.length === 0) return null
@@ -15,7 +16,8 @@ export function MediaGrid({ media }: MediaGridProps) {
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {media.map((item, idx) => {
           if (!item.file) return null
-          const src = `/media/${item.file}`
+          const src = mediaUrl(guildId, item.file)
+          if (!src) return null
           const isVideo = item.type === 'video'
 
           return isVideo ? (

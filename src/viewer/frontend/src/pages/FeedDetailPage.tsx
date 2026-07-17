@@ -108,7 +108,7 @@ function FeedDetailContent({ feed }: FeedDetailContentProps) {
           </p>
         )}
 
-        <MediaGrid media={media} />
+        <MediaGrid media={media} guildId={feed.guild_id} />
 
         {media.length === 0 && !feed.title_text && (
           <p className="mt-4 text-sm text-gray-400">暂无内容</p>

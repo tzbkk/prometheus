@@ -14,6 +14,8 @@ on non-2xx.
 import json
 import os
 import sqlite3
+import threading
+import contextlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -25,8 +27,8 @@ HandlerResult = Tuple[int, ResponseBody]
 # Must mirror the TS Feed interface in src/viewer/frontend/src/lib/api.ts —
 # the frontend reads these keys by name.
 _FEED_COLUMNS = (
-    "id, create_time, title_text, author_nick, author_id, author_avatar, "
-    "like_count, comment_count, image_count, video_count"
+    "id, guild_id, create_time, title_text, author_nick, author_id, "
+    "author_avatar, like_count, comment_count, image_count, video_count"
 )
 
 
@@ -63,10 +65,11 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 def handle_feeds(db_path: str, query_params: Dict[str, List[str]]) -> HandlerResult:
-    """GET /api/feeds?page=&size= — newest-first paginated feed list.
+    """GET /api/feeds?page=&size=&guild= — newest-first paginated feed list.
 
     Each item includes all ``Feed`` columns plus ``first_media`` (the file
-    name of the first media row, or null) for thumbnail display.
+    name of the first media row, or null) for thumbnail display. When
+    ``guild`` is supplied, results are filtered to that guild_id.
     """
     try:
         page, size = _parse_pagination(query_params)
@@ -74,6 +77,9 @@ def handle_feeds(db_path: str, query_params: Dict[str, List[str]]) -> HandlerRes
         return 400, {"error": str(exc)}
 
     offset = (page - 1) * size
+    guild_id = _get_param(query_params, "guild")
+    where_clause = "WHERE guild_id = ?" if guild_id is not None else ""
+    params: list = ([guild_id] if guild_id is not None else []) + [size, offset]
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -81,8 +87,9 @@ def handle_feeds(db_path: str, query_params: Dict[str, List[str]]) -> HandlerRes
             f"SELECT {_FEED_COLUMNS}, "
             "(SELECT file FROM media WHERE feed_id = feeds.id "
             "AND url NOT LIKE '%qlogo%' ORDER BY rowid LIMIT 1) AS first_media "
-            "FROM feeds ORDER BY create_time DESC LIMIT ? OFFSET ?",
-            (size, offset),
+            f"FROM feeds {where_clause} ORDER BY create_time DESC "
+            "LIMIT ? OFFSET ?",
+            tuple(params),
         ).fetchall()
     finally:
         conn.close()
@@ -169,11 +176,12 @@ def handle_feed_detail(db_path: str, feed_id: str) -> HandlerResult:
 
 
 def handle_search(db_path: str, query_params: Dict[str, List[str]]) -> HandlerResult:
-    """GET /api/search?q=&page=&size= — substring search on title_text.
+    """GET /api/search?q=&page=&size=&guild= — substring search on title_text.
 
     Uses LIKE instead of FTS5 MATCH because FTS5's ``unicode61`` tokenizer
     does not segment CJK text, making Chinese substring searches useless.
-    With ~8745 feeds, LIKE performance is perfectly adequate.
+    With ~8745 feeds, LIKE performance is perfectly adequate. When ``guild``
+    is supplied, results are filtered to that guild_id.
     """
     q = _get_param(query_params, "q", "") or ""
     if not q.strip():
@@ -185,19 +193,43 @@ def handle_search(db_path: str, query_params: Dict[str, List[str]]) -> HandlerRe
     offset = (page - 1) * size
 
     pattern = f"%{q}%"
+    guild_id = _get_param(query_params, "guild")
+    sql = (
+        f"SELECT {_FEED_COLUMNS} FROM feeds "
+        "WHERE (title_text LIKE ? OR raw_json LIKE ?)"
+    )
+    params: list = [pattern, pattern]
+    if guild_id is not None:
+        sql += " AND guild_id = ?"
+        params.append(guild_id)
+    sql += " ORDER BY create_time DESC LIMIT ? OFFSET ?"
+    params.extend([size, offset])
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            f"SELECT {_FEED_COLUMNS} FROM feeds "
-            "WHERE title_text LIKE ? OR raw_json LIKE ? "
-            "ORDER BY create_time DESC LIMIT ? OFFSET ?",
-            (pattern, pattern, size, offset),
-        ).fetchall()
+        rows = conn.execute(sql, tuple(params)).fetchall()
     finally:
         conn.close()
     return 200, [_row_to_dict(r) for r in rows]
+
+
+def handle_guilds(db_path: str) -> HandlerResult:
+    """GET /api/guilds — list all guilds with feed counts.
+
+    Response shape is the contract for the frontend guild selector:
+    ``[{guild_id, guild_number, name, feeds}]`` ordered by feed count desc.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT guild_id, guild_number, name, feeds "
+            "FROM guilds ORDER BY feeds DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    return 200, [dict(r) for r in rows]
 
 
 def handle_stats(db_path: str) -> HandlerResult:
@@ -233,41 +265,41 @@ def handle_stats(db_path: str) -> HandlerResult:
     }
 
 
-def handle_rebuild(db_path: str, data_dir: str) -> HandlerResult:
-    """POST /api/rebuild — full index rebuild from scratch.
+def handle_rebuild(db_path: str, data_dir: str,
+                   rebuild_lock: Optional[threading.Lock] = None) -> HandlerResult:
+    """POST /api/rebuild — full multi-guild rebuild (discovers data/<guild_id>/).
 
-    Drops all feeds, FTS, and media rows, then re-indexes feeds.jsonl and
-    media_index.jsonl from the beginning. Use when the index is corrupted or
-    after bulk data cleanup.
+    When ``rebuild_lock`` is supplied it is held for the duration of the
+    rebuild so the background poller (which acquires the same lock before
+    its incremental cycle) cannot race against a half-mutated DB (G12).
     """
-    feeds_path = os.path.join(str(data_dir), "feeds.jsonl")
-    media_index_path = os.path.join(str(data_dir), "media_index.jsonl")
+    if not os.path.isdir(data_dir):
+        return 404, {"ok": False, "error": f"data dir not found: {data_dir}"}
 
-    if not os.path.exists(feeds_path):
-        return 404, {"ok": False, "error": f"feeds file not found: {feeds_path}"}
+    ctx = rebuild_lock if rebuild_lock is not None else contextlib.nullcontext()
+    with ctx:
+        conn = sqlite3.connect(db_path)
+        try:
+            before = conn.execute("SELECT COUNT(*) FROM feeds").fetchone()[0]
+        finally:
+            conn.close()
 
-    conn = sqlite3.connect(db_path)
-    try:
-        before = conn.execute("SELECT COUNT(*) FROM feeds").fetchone()[0]
-    finally:
-        conn.close()
+        indexer = Indexer(db_path)
+        try:
+            list(indexer.build_all_guilds(data_dir))
+        except Exception as exc:
+            return 500, {"ok": False, "error": str(exc)}
 
-    indexer = Indexer(db_path)
-    try:
-        list(indexer.build_all(feeds_path, media_index_path))
-    except Exception as exc:
-        return 500, {"ok": False, "error": str(exc)}
-
-    now = datetime.now(timezone.utc).isoformat()
-    conn = sqlite3.connect(db_path)
-    try:
-        after = conn.execute("SELECT COUNT(*) FROM feeds").fetchone()[0]
-        conn.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            ("indexed_at", now),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+        now = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(db_path)
+        try:
+            after = conn.execute("SELECT COUNT(*) FROM feeds").fetchone()[0]
+            conn.execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                ("indexed_at", now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     return 200, {"ok": True, "new_count": after - before, "total": after}

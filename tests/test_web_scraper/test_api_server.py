@@ -190,8 +190,9 @@ class TestStats(unittest.TestCase):
         finally:
             api.stop()
 
-    def test_stats_uses_store_set_sizes_when_stats_counts_zero(self):
-        # When stats counts are not maintained, fall back to Store set sizes.
+    def test_stats_no_store_fallback(self):
+        # G6: stats is authoritative. When stats counts are 0, the response is 0 —
+        # it does NOT fall back to store._feed_ids / _comment_keys lengths.
         store = _make_store_mock()
         store._feed_ids = {"a", "b", "c"}
         store._comment_keys = {"k1", "k2"}
@@ -202,8 +203,41 @@ class TestStats(unittest.TestCase):
         try:
             status, body = _request(base, "/stats")
             self.assertEqual(status, 200)
-            self.assertEqual(body["data"]["feeds_count"], 3)
-            self.assertEqual(body["data"]["comments_count"], 2)
+            self.assertEqual(body["data"]["feeds_count"], 0)
+            self.assertEqual(body["data"]["comments_count"], 0)
+        finally:
+            api.stop()
+
+    def test_stats_includes_guilds_breakdown(self):
+        # Multi-guild: /stats surfaces per-guild counts in the `guilds` dict.
+        guilds = {
+            "111": {"feeds_count": 3, "comments_count": 2, "media_count": 7, "last_scan_ts": 1234567890},
+            "222": {"feeds_count": 2, "comments_count": 1, "media_count": 3, "last_scan_ts": 1234567891},
+        }
+        stats = _make_stats(feeds_count=5, comments_count=3, media_count=10, guilds=guilds)
+        api, base = _start_server(stats=stats)
+        try:
+            status, body = _request(base, "/stats")
+            self.assertEqual(status, 200)
+            data = body["data"]
+            self.assertIn("guilds", data)
+            self.assertEqual(data["guilds"]["111"]["feeds_count"], 3)
+            self.assertEqual(data["guilds"]["111"]["media_count"], 7)
+            self.assertEqual(data["guilds"]["222"]["comments_count"], 1)
+            self.assertEqual(data["guilds"]["222"]["last_scan_ts"], 1234567891)
+        finally:
+            api.stop()
+
+    def test_stats_omits_guilds_key_when_absent(self):
+        # Backward-compat: if daemon hasn't populated stats["guilds"], the response
+        # includes guilds: {} (never missing, never None).
+        stats = _make_stats()
+        stats.pop("guilds", None)
+        api, base = _start_server(stats=stats)
+        try:
+            status, body = _request(base, "/stats")
+            self.assertEqual(status, 200)
+            self.assertEqual(body["data"]["guilds"], {})
         finally:
             api.stop()
 
@@ -285,6 +319,61 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(body["data"].get("updated"), True)
             status2, body2 = _request(base, "/config")
             self.assertEqual(body2["data"].get("scraper_max_workers"), 20)
+        finally:
+            api.stop()
+
+    def test_config_put_rejects_guilds(self):
+        # N6: guilds cannot be mutated via API; only via conf/guilds.conf.json.
+        # A PUT containing a `guilds` key is rejected and existing config is
+        # left untouched.
+        stats = _make_stats()
+        stats["config"]["guilds"] = [
+            {"guild_id": "111", "guild_number": "g1", "name": "G1"}
+        ]
+        api, base = _start_server(stats=stats)
+        try:
+            status, body = _request(
+                base,
+                "/config",
+                method="PUT",
+                body={"guilds": [{"guild_id": "999", "guild_number": "x", "name": "X"}]},
+            )
+            self.assertEqual(status, 200)
+            self.assertFalse(body["ok"])
+            self.assertIn("guilds.conf.json", body["error"])
+            # Existing guilds list is unchanged.
+            self.assertEqual(len(stats["config"]["guilds"]), 1)
+            self.assertEqual(stats["config"]["guilds"][0]["guild_id"], "111")
+        finally:
+            api.stop()
+
+    def test_config_put_with_empty_body_still_ok(self):
+        # N6 refactor: empty body path must still return updated:True.
+        stats = _make_stats()
+        api, base = _start_server(stats=stats)
+        try:
+            status, body = _request(base, "/config", method="PUT", body={})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["data"].get("updated"), True)
+        finally:
+            api.stop()
+
+    def test_config_includes_guilds_list(self):
+        # Multi-guild: /config surfaces the guilds list (guild_id, guild_number,
+        # name) populated by __main__._build_components.
+        guilds_list = [
+            {"guild_id": "111", "guild_number": "g1", "name": "G1"},
+            {"guild_id": "222", "guild_number": "g2", "name": "G2"},
+        ]
+        stats = _make_stats()
+        stats["config"]["guilds"] = guilds_list
+        api, base = _start_server(stats=stats)
+        try:
+            status, body = _request(base, "/config")
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["data"]["guilds"], guilds_list)
         finally:
             api.stop()
 

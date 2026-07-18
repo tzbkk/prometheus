@@ -30,11 +30,18 @@ const CFG = {
     scrollMax:      parseInt(E.PROMETHEUS_SCROLL_MAX_ITERATIONS || "5000", 10),
     daemonMode:     E.PROMETHEUS_DAEMON_MODE === "true" || E.PROMETHEUS_DAEMON_MODE === "1" || E.PROMETHEUS_DAEMON_MODE === undefined,
     daemonInterval: parseInt(E.PROMETHEUS_DAEMON_INTERVAL_MS || "300000", 10),
+    idOnly:         E.PROMETHEUS_ID_ONLY === "true" || E.PROMETHEUS_ID_ONLY === "1",
 };
 try {
     CFG.startupSequence = JSON.parse(E.PROMETHEUS_STARTUP_SEQUENCE || "[]");
 } catch (e) {
     CFG.startupSequence = [];
+}
+try {
+    CFG.guilds = JSON.parse(E.PROMETHEUS_GUILDS_JSON || "[]");
+    if (!Array.isArray(CFG.guilds)) CFG.guilds = [];
+} catch (e) {
+    CFG.guilds = [];
 }
 
 CFG.apiPort = parseInt(E.PROMETHEUS_API_PORT || "9420", 10);
@@ -61,22 +68,29 @@ const lock = new Lock({dataDir: CFG.dataDir, logger: logger});
 try { fs.mkdirSync(CFG.dataDir, {recursive:true}); } catch(e) {}
 logger.log("INFO", "=== Start === config: " + JSON.stringify({
     channelId: CFG.channelId, channelName: CFG.channelName,
-    scanDepth: CFG.scanDepth, feedIdPrefix: CFG.feedIdPrefix
+    scanDepth: CFG.scanDepth, feedIdPrefix: CFG.feedIdPrefix,
+    idOnly: CFG.idOnly, guilds: CFG.guilds.length
 }));
 
 const capturedIds = new Set();
-try { (fs.readFileSync(CFG.dataDir+"/ids.json","utf8")||"").split("\n").filter(Boolean).forEach(id => capturedIds.add(id)); } catch(e) {}
-try { fs.readFileSync(CFG.dataDir+"/feeds.jsonl","utf8").split("\n").filter(Boolean).forEach(l=>{try{const d=JSON.parse(l);if(d.id)capturedIds.add(d.id)}catch(e){}}); } catch(e) {}
-logger.log("INFO", "Loaded "+capturedIds.size+" IDs");
-setInterval(()=>{try{fs.writeFileSync(CFG.dataDir+"/ids.json",[...capturedIds].join("\n"))}catch(e){}},10000);
+if (CFG.guilds.length === 0) {
+    try { (fs.readFileSync(CFG.dataDir+"/ids.json","utf8")||"").split("\n").filter(Boolean).forEach(id => capturedIds.add(id)); } catch(e) {}
+    try { fs.readFileSync(CFG.dataDir+"/feeds.jsonl","utf8").split("\n").filter(Boolean).forEach(l=>{try{const d=JSON.parse(l);if(d.id)capturedIds.add(d.id)}catch(e){}}); } catch(e) {}
+    logger.log("INFO", "Loaded "+capturedIds.size+" IDs");
+    setInterval(()=>{try{fs.writeFileSync(CFG.dataDir+"/ids.json",[...capturedIds].join("\n"))}catch(e){}},10000);
+} else {
+    logger.log("INFO", "Multi-guild mode: per-guild preload deferred to getGuildState, skipping flat ids.json");
+}
 
 const mediaSeen = new Set();
 const mediaQueue = [];
 const deadMediaQueue = [];
-try { (fs.readFileSync(CFG.dataDir+"/dead_media.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{deadMediaQueue.push(JSON.parse(l))}catch(e){}}); } catch(e) {}
-try { (fs.readFileSync(CFG.dataDir+"/media_index.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{var e=JSON.parse(l);if(e.url)mediaSeen.add(e.url)}catch(e){}}); } catch(e) {}
-try { (fs.readFileSync(CFG.dataDir+"/dead_media_permanent.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{mediaSeen.add(JSON.parse(l).url)}catch(e){}}); } catch(e) {}
-try { fs.mkdirSync(CFG.dataDir+"/media",{recursive:true}); } catch(e) {}
+if (!CFG.idOnly) {
+    try { (fs.readFileSync(CFG.dataDir+"/dead_media.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{deadMediaQueue.push(JSON.parse(l))}catch(e){}}); } catch(e) {}
+    try { (fs.readFileSync(CFG.dataDir+"/media_index.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{var e=JSON.parse(l);if(e.url)mediaSeen.add(e.url)}catch(e){}}); } catch(e) {}
+    try { (fs.readFileSync(CFG.dataDir+"/dead_media_permanent.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{mediaSeen.add(JSON.parse(l).url)}catch(e){}}); } catch(e) {}
+    try { fs.mkdirSync(CFG.dataDir+"/media",{recursive:true}); } catch(e) {}
+}
 
 const STATE_FILES = ['feeds.jsonl'];
 function computeStateHash() {
@@ -136,54 +150,59 @@ function queueMedia(urls, source) {
     });
 }
 
-function saveFeed(o) { try { const fid=o.id||""; if(!fid||capturedIds.has(fid))return; const sign=(o.channelInfo&&o.channelInfo.sign)||{}; if(sign.guild_id&&sign.guild_id!==CFG.channelId)return; fs.appendFileSync(CFG.dataDir+"/feeds.jsonl",JSON.stringify(o)+"\n"); capturedIds.add(fid); queueMedia(extractMediaUrls(o), fid); } catch(e) { try { fs.appendFileSync(CFG.dataDir+"/prometheus.log", `[${new Date().toISOString()}] saveFeed err: ${e.message} fid=${(o&&o.id)||'?'}\n`); } catch(e2){} } }
+const guildStates = new Map();
+let currentGuildId = CFG.channelId;
 
-const capturedCommentKeys = new Set();
-try { (fs.readFileSync(CFG.dataDir+"/comments.jsonl","utf8")||"").split("\n").filter(Boolean).forEach(l=>{try{const k=computeCommentKey(JSON.parse(l));if(k)capturedCommentKeys.add(k)}catch(e){}}); } catch(e) {}
-logger.log("INFO", "Loaded "+capturedCommentKeys.size+" comment keys");
-
-function computeCommentKey(o) {
-    try {
-        var d=o.d||{};
-        var vc=null;
-        if(d.d&&d.d.data&&Array.isArray(d.d.data.vecComment))vc=d.d.data.vecComment;
-        else if(Array.isArray(d.vecComment))vc=d.vecComment;
-        else if(d.found&&d.found[0]&&Array.isArray(d.found[0].vecComment))vc=d.found[0].vecComment;
-        if(!vc||vc.length===0)return null;
-        var ids=vc.map(function(c){return c.id||''}).filter(Boolean).sort();
-        if(ids.length===0)return null;
-        return ids.join(',');
-    } catch(e) { return null; }
+    function getGuildState(guildId) {
+        guildId = String(guildId);
+        if (!guildId) return null;
+    if (!guildStates.has(guildId)) {
+        const dataDir = path.join(CFG.dataDir, guildId);
+        try { fs.mkdirSync(dataDir, {recursive:true}); } catch(e) {}
+        const gs = { capturedIds: new Set(), dataDir: dataDir, bottomReached: false };
+        try {
+            (fs.readFileSync(dataDir + "/feeds.jsonl", "utf8") || "")
+                .split("\n").filter(Boolean).forEach(function(l) {
+                    try { const d = JSON.parse(l); if (d.id) gs.capturedIds.add(d.id); } catch(e) {}
+                });
+        } catch(e) {}
+        guildStates.set(guildId, gs);
+        logger.log("INFO", "[guild " + guildId + "] state init: dataDir=" + dataDir + " preloaded=" + gs.capturedIds.size);
+    }
+    return guildStates.get(guildId);
 }
 
-function saveComment(jsonStr) {
-    try {
-        const o = JSON.parse(jsonStr);
-        const key = computeCommentKey(o);
-        if (key) {
-            if (capturedCommentKeys.has(key)) return;
-            capturedCommentKeys.add(key);
-        }
-        fs.appendFileSync(CFG.dataDir+"/comments.jsonl", JSON.stringify(o) + "\n");
-        var d=o.d||{};
-        var vc=null;
-        if(d.d&&d.d.data&&Array.isArray(d.d.data.vecComment))vc=d.d.data.vecComment;
-        else if(Array.isArray(d.vecComment))vc=d.vecComment;
-        else if(d.found&&d.found[0]&&Array.isArray(d.found[0].vecComment))vc=d.found[0].vecComment;
-        if(vc)vc.forEach(function(c){queueMedia(extractMediaUrls(c),c.id||'comment')});
-    } catch(e) {}
+function isGuildAllowed(guildId) {
+    if (CFG.guilds.length === 0) return true;
+    if (!guildId) return false;
+    return CFG.guilds.some(function(g) { return String(g.guild_id) === String(guildId); });
 }
 
-function deepScanComments(obj, source, depth) {
-    if (depth > 5 || !obj || typeof obj !== 'object') return;
+function saveFeed(o) {
     try {
-        if (Array.isArray(obj.vecComment) && obj.vecComment.length > 0) {
-            saveComment(JSON.stringify({_s: source, ts: Date.now(), d: {totalNum: obj.totalNum, vecComment: obj.vecComment}}));
-            logger.log("INFO", "COMMENT HIT via " + source + " (" + obj.vecComment.length + " comments)");
+        const fid = o.id || "";
+        if (!fid) return;
+        const sign = (o.channelInfo && o.channelInfo.sign) || {};
+        const gid = sign.guild_id != null ? String(sign.guild_id) : "";
+        const multiGuild = CFG.guilds.length > 0;
+
+        if (multiGuild) {
+            if (!isGuildAllowed(gid)) return;
+        } else {
+            if (sign.guild_id && sign.guild_id !== CFG.channelId) return;
         }
-    } catch(e) {}
-    for (const k in obj) {
-        if (obj[k] && typeof obj[k] === 'object') deepScanComments(obj[k], source, depth + 1);
+
+        const gs = multiGuild ? getGuildState(gid) : null;
+        const ids = multiGuild ? gs.capturedIds : capturedIds;
+        const outDir = multiGuild ? gs.dataDir : CFG.dataDir;
+        if (ids.has(fid)) return;
+
+        fs.appendFileSync(outDir + "/feeds.jsonl", JSON.stringify(o) + "\n");
+        ids.add(fid);
+        if (multiGuild) capturedIds.add(fid);
+        if (!CFG.idOnly) queueMedia(extractMediaUrls(o), fid);
+    } catch(e) {
+        try { fs.appendFileSync(CFG.dataDir + "/prometheus.log", `[${new Date().toISOString()}] saveFeed err: ${e.message} fid=${(o && o.id) || '?'}\n`); } catch(e2) {}
     }
 }
 
@@ -193,142 +212,7 @@ window._oRAF=requestAnimationFrame;window._oCAF=cancelAnimationFrame;
 requestAnimationFrame=function(cb){return setTimeout(function(){cb(performance.now())},0)};
 cancelAnimationFrame=function(id){clearTimeout(id)};
 var PREFIX=${JSON.stringify(CFG.feedIdPrefix)},D=${CFG.scanDepth},AD=${CFG.scanArrayDepth};
-var seenC={};
-var o=JSON.parse;JSON.parse=function(){var r=o.apply(this,arguments);try{if(r&&typeof r==='object'){var f=[],cc=[];(function F(x,d,cfid){if(d>D||!x||typeof x!=='object')return;var fid=cfid;if(x.id&&typeof x.id==='string'&&x.id.startsWith(PREFIX)&&(x.createTime||x.poster||x.title)){fid=x.id;f.push(x)}if(Array.isArray(x.feeds))x.feeds.forEach(function(i){if(i&&i.id&&typeof i.id==='string'&&i.id.startsWith(PREFIX))f.push(i)});if(Array.isArray(x.vecComment)&&x.vecComment.length>0){var fid2=fid||x.feedId||(window.__prom_fetching_pid||'');var key=fid2+'_'+x.vecComment.length+'_'+(x.vecComment[0]&&x.vecComment[0].id||'');if(!seenC[key]){seenC[key]=1;cc.push({feedId:fid2,totalNum:x.totalNum,vecComment:x.vecComment})}}if(d<AD)for(var k in x)if(x[k]&&typeof x[k]==='object')F(x[k],d+1,fid)})(r,0,'');for(var i=0;i<f.length;i++)console.log('[P]'+JSON.stringify(f[i]));for(var i=0;i<cc.length;i++)console.log('[PC]'+JSON.stringify({_s:'json_parse_comments',ts:Date.now(),d:cc[i]}))}}catch(e){}return r}})();
-`;
-
-// Renderer-side hooks for IPC/fetch/XHR/Vuex — injected after QQ settles
-const COMMENT_HOOK_JS = `
-(function(){if(window.__PC)return;window.__PC=1;
-
-var log=function(tag,obj){try{console.log('[PC]'+JSON.stringify({_s:tag,ts:Date.now(),d:obj}))}catch(e){}};
-
-// 0. bkn capture — extract from any passing URL
-window.__prom_bkn=window.__prom_bkn||'';
-
-// 1. IPC hook — scan ALL invoke responses and emit events for vecComment
-try{(function(){
-    var ir=window.ipcRenderer;
-    if(!ir)return;
-    if(typeof ir.invoke==='function'){
-        var oi=ir.invoke;
-        ir.invoke=function(ch,a){
-            var r=oi.call(this,ch,a);
-            if(r&&typeof r.then==='function')return r.then(function(d){
-                try{
-                    var found=[];
-                    (function S(x,dep){if(dep>6||!x||typeof x!=='object')return;if(Array.isArray(x.vecComment)&&x.vecComment.length>0)found.push({totalNum:x.totalNum,vecComment:x.vecComment});for(var k in x)if(x[k]&&typeof x[k]==='object')S(x[k],dep+1)})(d,0);
-                    if(found.length>0)log('ipc_invoke_comments',{c:ch,found:found});
-                }catch(e){}
-                return d
-            });
-            return r
-        };
-    }
-    if(typeof ir.emit==='function'){
-        var oe=ir.emit;
-        ir.emit=function(ch){
-            try{
-                for(var i=1;i<arguments.length;i++){
-                    var a=arguments[i];
-                    if(a&&typeof a==='object'){
-                        var found=[];
-                        (function S(x,dep){if(dep>6||!x||typeof x!=='object')return;if(Array.isArray(x.vecComment)&&x.vecComment.length>0)found.push(x.vecComment);for(var k in x)if(x[k]&&typeof x[k]==='object')S(x[k],dep+1)})(a,0);
-                        if(found.length>0)log('ipc_emit_comments',{c:ch,count:found.reduce(function(s,f){return s+f.length},0)});
-                    }
-                }
-            }catch(e){}
-            return oe.apply(this,arguments)
-        };
-    }
-})()}catch(e){}
-
-// 2. fetch hook — capture OIDB header and bkn only, no response logging
-try{(function(){
-    if(typeof fetch!=='function')return;
-    var of=fetch;
-    fetch=function(i,n){
-        var url=typeof i==='string'?i:(i&&i.url)||'';
-        try{var bknM=url.match(/[?&]bkn=(\d+)/);if(bknM&&bknM[1])window.__prom_bkn=bknM[1];}catch(e){}
-        var hdrs=(n&&n.headers)||{};
-        if(!(hdrs instanceof Object)||typeof hdrs.entries==='function'){
-            hdrs={}; if(n&&n.headers&&typeof n.headers.entries==='function'){try{var ent=n.headers.entries();while(true){try{var kv=ent.next();if(kv.done)break;hdrs[kv.value[0]]=kv.value[1]}catch(e){break}}}catch(e){}}
-        }
-        try{
-            if(hdrs['x-oidb']&&(typeof url==='string')&&url.toLowerCase().indexOf('getfeedcomments')>=0){
-                window.__prom_comment_oidb=hdrs['x-oidb'];
-                window.__prom_comment_appid=hdrs['x-qq-client-appid']||'537355866';
-                console.log('[Prometheus] Captured comment OIDB header');
-            }
-        }catch(e){}
-        return of.call(this,i,n);
-    };
-})()}catch(e){}
-
-// 4. Expose direct comment fetcher for main process to call
-//     Main process sets window.__prom_bkn before calling this
-window.__prom_getComments=function(postId,guildId){
-    var bkn=window.__prom_bkn;
-    if(!bkn){log('bkn_missing',{postId:postId});return;}
-    var url='https://pd.qq.com/qunng/guild/gotrpc/auth/trpc.qchannel.commreader.ComReader/GetFeedComments?bkn='+bkn+'&_t='+Date.now()+'&_v=1.0.1&client_platform=pcqqwebview';
-    var body=JSON.stringify({feedId:postId,listNum:20,from:1,src:0,attchInfo:"",needInsertComment:[],needInsertCommentID:"",needInsertReplyID:"",channelSign:{guild_number:guildId},extInfo:{mapInfo:[{key:"qc-tabid",value:""},{key:"qc-pageid",value:""}]},rankingType:1,replyListNum:1,render_sticker:true});
-    var hdrs={'Content-Type':'application/json'};
-    if(window.__prom_comment_oidb){
-        hdrs['x-oidb']=window.__prom_comment_oidb;
-        hdrs['x-qq-client-appid']=window.__prom_comment_appid||'537355866';
-    }
-    window.__prom_fetching_pid=postId;
-    setTimeout(function(){if(window.__prom_fetching_pid===postId)window.__prom_fetching_pid='';},5000);
-    return fetch(url,{method:'POST',credentials:'include',headers:hdrs,body:body}).then(function(r){return r});
-};
-
-// 5. Explore QQ bridge objects
-try{(function(){
-    ['__NTV','__NEXT','nt','QQNT','qq','Bridge','ipc','NTAPI','QQ','__QQ','$NT'].forEach(function(n){
-        try{var o=window[n];if(o&&typeof o==='object')log('bridge_found',{n:n,t:Object.prototype.toString.call(o),k:Object.keys(o).slice(0,30)})}catch(e){}
-    });
-})()}catch(e){}
-
-// 6. Vue deep dive
-setTimeout(function(){
-    try{
-        var el=document.getElementById('app');
-        if(!el||!el.__vue_app__)return;
-        var app=el.__vue_app__;
-        try{
-            var rt=app.config.globalProperties['$router'];
-            if(rt)log('vue_router',{options:JSON.stringify(rt.options?Object.keys(rt.options):'no options'),routes:(rt.options&&rt.options.routes)?rt.options.routes.map(function(r){return r.path||r.name||r}).slice(0,30):null});
-        }catch(e){}
-        try{
-            var qc=app._context.provides['VUE_QUERY_CLIENT']||app.config.globalProperties['$query'];
-            if(qc){
-                var cache=qc.getQueryCache?qc.getQueryCache():null;
-                if(cache){
-                    var queries=cache.getAll?cache.getAll():[];
-                    log('vq_cache',{qcount:queries.length,qkeys:queries.slice(0,20).map(function(q){var k=q.queryKey;return JSON.stringify(k).slice(0,100)})});
-                }
-            }
-        }catch(e){}
-        try{
-            function walkVNode(vn,depth){
-                if(depth>8||!vn)return;
-                var type=vn.type;
-                if(typeof type==='string')return;
-                if(typeof type==='object'){
-                    var name=type.__name||type.name||'anon';
-                    if(name.indexOf('Feed')>=0||name.indexOf('Guild')>=0||name.indexOf('Channel')>=0||name.indexOf('Post')>=0||name.indexOf('Comment')>=0){
-                        log('vue_feed_comp',{name:name,keys:vn.setupState?Object.keys(vn.setupState).slice(0,30):null});
-                    }
-                }
-                if(vn.component&&vn.component.subTree)walkVNode(vn.component.subTree,depth+1);
-                if(vn.children&&Array.isArray(vn.children))vn.children.forEach(function(c){if(typeof c==='object')walkVNode(c,depth+1)});
-                if(vn.component&&vn.component.ctx)vn=vn.component.ctx;
-            }
-            walkVNode(el.__vue_app__._instance,0);
-        }catch(e){}
-    }catch(e){}
-},25000);
-})();
+var o=JSON.parse;JSON.parse=function(){var r=o.apply(this,arguments);try{if(r&&typeof r==='object'){var f=[];(function F(x,d,cfid){if(d>D||!x||typeof x!=='object')return;var fid=cfid;if(x.id&&typeof x.id==='string'&&x.id.startsWith(PREFIX)&&(x.createTime||x.poster||x.title)){fid=x.id;f.push(x)}if(Array.isArray(x.feeds))x.feeds.forEach(function(i){if(i&&i.id&&typeof i.id==='string'&&i.id.startsWith(PREFIX))f.push(i)});if(d<AD)for(var k in x)if(x[k]&&typeof x[k]==='object')F(x[k],d+1,fid)})(r,0,'');for(var i=0;i<f.length;i++)console.log('[P]'+JSON.stringify(f[i]))}}catch(e){}return r}})();
 `;
 
 let electron; try { electron=require("electron") } catch(e) { logger.log("WARN", "No electron") }
@@ -378,7 +262,7 @@ if (electron && electron.app) {
     function flushDeadMedia() {
         try { fs.writeFileSync(CFG.dataDir+"/dead_media.jsonl", deadMediaQueue.map(function(x){return JSON.stringify(x)}).join("\n")+(deadMediaQueue.length?"\n":"")); } catch(e) {}
     }
-    setInterval(flushDeadMedia, 10000);
+    if (!CFG.idOnly) setInterval(flushDeadMedia, 10000);
 
     setInterval(function() {
         var n = 0;
@@ -390,26 +274,11 @@ if (electron && electron.app) {
     }, 2000);
 
     app.on('web-contents-created', (ev, wc) => {
-        try {
-            const origSend = wc.send.bind(wc);
-            wc.send = function(ch, ...args) {
-                try { for (const a of args) { if (a && typeof a === 'object') deepScanComments(a, 'wc_send:'+ch, 0); } } catch(e) {}
-                return origSend(ch, ...args);
-            };
-        } catch(e) { logger.log("WARN", "wc.send wrap err: " + e.message); }
         wc.on('dom-ready', () => {
             wc.executeJavaScript(INJECT_JS).catch(()=>{});
-            // Comment hooks (IPC/fetch/XHR/bridge) inject after a brief settle
-            setTimeout(() => {
-                wc.executeJavaScript(COMMENT_HOOK_JS).catch(()=>{});
-            }, 5000);
         });
         wc.on('console-message', (e, lvl, msg) => {
-            if (msg.startsWith('[PC]')) {
-                try { saveComment(msg.substring(4)); } catch(err) {}
-                try { const m = msg.match(/[?&]bkn=(\d+)/); if (m) globalBkn = m[1]; } catch(e) {}
-            }
-            else if (msg.startsWith('[P]')) { try { saveFeed(JSON.parse(msg.substring(3))); } catch(err) {} }
+            if (msg.startsWith('[P]')) { try { saveFeed(JSON.parse(msg.substring(3))); } catch(err) {} }
             else if (msg.startsWith('[Prometheus]')) logger.log("INFO", "R: "+msg);
             else if (lvl > 2) {
                 // Filter known QQ renderer noise to DEBUG; real errors stay ERROR
@@ -419,34 +288,40 @@ if (electron && electron.app) {
         });
     });
 
-    function switchToGuild() {
+    function switchToGuild(guildConfig) {
+        const tag = guildConfig ? `[guild: ${guildConfig.name}] ` : '';
+        const tagJS = JSON.stringify(tag);
         BrowserWindow.getAllWindows().forEach(win => {
             const u = win.webContents.getURL();
             if (!u.includes(CFG.urlGuildPage) || u.includes(CFG.urlHiddenWin)) return;
             win.webContents.executeJavaScript(`
                 (function(){
-                    if (location.hash.includes('/main/guild')) { console.log('[Prometheus] Guild OK'); return; }
+                    if (location.hash.includes('/main/guild')) { console.log('[Prometheus] ' + ${tagJS} + 'Guild OK'); return; }
                     var menu = ${JSON.stringify(CFG.guildMenuText)};
                     document.querySelectorAll('*').forEach(el => {
                         if (el.children.length<3 && el.textContent.trim()===menu) el.click();
                     });
                     location.hash = '#/main/guild';
-                    console.log('[Prometheus] Hash -> guild');
+                    console.log('[Prometheus] ' + ${tagJS} + 'Hash -> guild');
                 })();
             `).catch(()=>{});
         });
     }
 
-    function clickChannel() {
+    function clickChannel(guildConfig) {
+        const channelId = (guildConfig && guildConfig.guild_id) || CFG.channelId;
+        const channelName = (guildConfig && guildConfig.name) || CFG.channelName;
+        const tag = guildConfig ? `[guild: ${guildConfig.name}] ` : '';
+        const tagJS = JSON.stringify(tag);
         const all = electron.webContents.getAllWebContents();
         all.forEach(wc => {
             try {
                 if (!wc.getURL().includes(CFG.urlChannelPage)) return;
                 wc.executeJavaScript(`
                     (function(){
-                        var CNAME = ${JSON.stringify(CFG.channelName)};
-                        if (location.href.includes('/channels/${CFG.channelId}') || location.href.includes('/g/${CFG.channelId}')) {
-                            if (!window.__PClicked) { window.__PClicked = true; console.log('[Prometheus] Already on channel'); }
+                        var CNAME = ${JSON.stringify(channelName)};
+                        if (location.href.includes('/channels/${channelId}') || location.href.includes('/g/${channelId}')) {
+                            if (!window.__PClicked) { window.__PClicked = true; console.log('[Prometheus] ' + ${tagJS} + 'Already on channel'); }
                             return;
                         }
                         var all = document.querySelectorAll('*');
@@ -462,11 +337,11 @@ if (electron && electron.app) {
                             }
                         }
                         if (best) {
-                            console.log('[Prometheus] Clicking: ' + best.textContent.trim().slice(0,30));
+                            console.log('[Prometheus] ' + ${tagJS} + 'Clicking: ' + best.textContent.trim().slice(0,30));
                             best.click();
                             window.__PClicked = true;
                         } else {
-                            console.log('[Prometheus] Channel element not found. Body text sample: ' + (document.body ? document.body.innerText.slice(0,100) : 'no body'));
+                            console.log('[Prometheus] ' + ${tagJS} + 'Channel element not found. Body text sample: ' + (document.body ? document.body.innerText.slice(0,100) : 'no body'));
                         }
                     })();
                 `).catch(()=>{});
@@ -475,6 +350,7 @@ if (electron && electron.app) {
     }
 
     let scrollCount = 0;
+    let currentGuildConfig = null;
     const savedState = readState();
 
     const lockBottom = lock.readBottomReached();
@@ -575,7 +451,8 @@ if (electron && electron.app) {
         }).catch(function(){});
     }
 
-    function doScroll() {
+    function doScroll(done) {
+        const tag = CFG.guilds.length > 0 ? `[guild: ${currentGuildConfig ? currentGuildConfig.name : CFG.channelId}] ` : '';
         const all = electron.webContents.getAllWebContents();
         for (const wc of all) {
             try {
@@ -598,7 +475,7 @@ if (electron && electron.app) {
                         return JSON.stringify({st: target.scrollTop, sh: target.scrollHeight, ch: target.clientHeight});
                     })()
                 `).then(function(r){
-                    if (scrollCount % 20 === 0) logger.log("DEBUG", "ScrollJS "+scrollCount+" feeds:"+capturedIds.size+" "+r);
+                    if (scrollCount % 20 === 0) logger.log("DEBUG", tag + "ScrollJS "+scrollCount+" feeds:"+capturedIds.size+" "+r);
                 }).catch(function(){});
                 scrollCount++;
                 if (scrollCount >= CFG.scrollMax) {
@@ -606,18 +483,62 @@ if (electron && electron.app) {
                     lock.setBottomReached(true);
                 }
                 if (scrollCount % 50 === 0) {
-                    logger.log("INFO", "Scroll #"+scrollCount+" feeds:"+capturedIds.size);
+                    logger.log("INFO", tag + "Scroll #"+scrollCount+" feeds:"+capturedIds.size);
                     probeBottom(wc);
                 }
                 break;
             } catch(e) {}
         }
-        if (scrollCount < CFG.scrollMax && !timelineBottomReached) setTimeout(doScroll, CFG.scrollInterval);
-        else logger.log("INFO", "doScroll end: scrollCount="+scrollCount+" bottom="+timelineBottomReached+" feeds="+capturedIds.size);
+        const guildDone = CFG.guilds.length > 0 && currentGuildId && getGuildState(currentGuildId) && getGuildState(currentGuildId).bottomReached;
+        if (scrollCount < CFG.scrollMax && !timelineBottomReached && !guildDone) {
+            setTimeout(() => doScroll(done), CFG.scrollInterval);
+        } else {
+            logger.log("INFO", tag + "doScroll end: scrollCount="+scrollCount+" bottom="+timelineBottomReached+" feeds="+capturedIds.size);
+            if (done) done();
+        }
+    }
+
+    function runMultiGuildSequence() {
+        const guilds = CFG.guilds;
+        let idx = 0;
+        logger.log("INFO", "Multi-guild startup: " + guilds.length + " guilds queued");
+        switchToGuild();
+        setTimeout(() => switchToGuild(), 9000);
+        function nextGuild() {
+            if (idx >= guilds.length) {
+                logger.log("INFO", "All " + guilds.length + " guilds completed (total feeds=" + capturedIds.size + ")");
+                return;
+            }
+            const g = guilds[idx];
+            idx++;
+            const gs = getGuildState(g.guild_id);
+            currentGuildId = g.guild_id;
+            currentGuildConfig = g;
+            gs.bottomReached = false;
+            scrollCount = 0;
+            timelineBottomReached = false;
+            probeLastScrollHeight = 0;
+            probeStall = 0;
+            logger.log("INFO", `[guild: ${g.name}] start (id=${g.guild_id} num=${g.guild_number})`);
+            clickChannel(g);
+            setTimeout(() => clickChannel(g), 5000);
+            setTimeout(() => clickChannel(g), 10000);
+            setTimeout(() => doScroll(() => {
+                gs.bottomReached = true;
+                logger.log("INFO", `[guild: ${g.name}] completed (feeds=${gs.capturedIds.size})`);
+                if (idx < guilds.length) {
+                    switchToGuild();
+                    setTimeout(nextGuild, 9000);
+                }
+            }), 15000);
+        }
+        setTimeout(nextGuild, 18000);
     }
 
     const actions = { switch_guild: switchToGuild, click_channel: clickChannel, start_scroll: () => doScroll() };
-    if (CFG.startupSequence.length > 0) {
+    if (CFG.guilds.length > 0) {
+        setTimeout(runMultiGuildSequence, 6000);
+    } else if (CFG.startupSequence.length > 0) {
         CFG.startupSequence.forEach(step => {
             const fn = actions[step.action];
             if (fn) setTimeout(fn, step.delay_ms);
@@ -633,83 +554,6 @@ if (electron && electron.app) {
         setTimeout(clickChannel, 55000);
     }
 
-    function traversePosts(maxPosts, startDelay) {
-        setTimeout(() => {
-            try {
-                const lines = fs.readFileSync(CFG.dataDir+"/feeds.jsonl","utf8").split("\n").filter(Boolean);
-                const ids = [];
-                for (let i = 0; i < lines.length && ids.length < maxPosts; i++) {
-                    try { const d = JSON.parse(lines[i]); if (d.id && (d.commentCount||0) > 0) ids.push(d.id); } catch(e) {}
-                }
-                if (ids.length === 0) { logger.log("INFO", "Fetch: no posts with comments"); return; }
-                logger.log("INFO", "Fetch: queued " + ids.length + " posts, globalBkn=" + globalBkn);
-
-                const guildId = CFG.channelId;
-                const all = electron.webContents.getAllWebContents();
-                for (const wc of all) {
-                    try {
-                        const u = wc.getURL();
-                        if (!u.includes(CFG.urlChannelPage)) continue;
-
-                        const discoveryIds = ids.slice(0, 3);
-                        const apiIds = ids;
-
-                        discoveryIds.forEach((postId, idx) => {
-                            const delay = idx * 16000;
-                            setTimeout(() => {
-                                wc.executeJavaScript(`
-                                    (function(){
-                                        var pid=${JSON.stringify(postId)};
-                                        if(window.__prom_comment_oidb){
-                                            console.log('[Prometheus] VR: skip '+pid.slice(0,16)+' (oidb captured)');
-                                            return;
-                                        }
-                                        var el=document.getElementById('app');
-                                        if(!el||!el.__vue_app__){return;}
-                                        var rt=el.__vue_app__.config.globalProperties['\$router'];
-                                        if(!rt){return;}
-                                        var gid=${JSON.stringify(guildId)};
-                                        console.log('[Prometheus] VR: '+pid.slice(0,16));
-                                        rt.push({path:'/g/'+gid+'/post/'+pid,query:{_t:Date.now()}}).catch(function(){});
-                                        setTimeout(function(){rt.push('/g/'+gid).catch(function(){})},13000);
-                                    })();
-                                `).catch(()=>{});
-                            }, delay);
-                        });
-
-                        const apiStart = discoveryIds.length * 16000 + 2000;
-                        apiIds.forEach((postId, idx) => {
-                            const delay = apiStart + idx * 100;
-                            setTimeout(() => {
-                                wc.executeJavaScript(`
-                                    (function(){
-                                        if(!window.__prom_getComments){return;}
-                                        var bkn=window.__prom_bkn||'${globalBkn}';
-                                        if(!bkn){return;}
-                                        window.__prom_bkn=bkn;
-                                        var pid=${JSON.stringify(postId)};
-                                        var gid=${JSON.stringify(guildId)};
-                                        var oidb=window.__prom_comment_oidb?'yes':'no';
-                                        console.log('[Prometheus] API: '+pid.slice(0,16)+' oidb='+oidb);
-                                        window.__prom_getComments(pid,gid).then(function(r){
-                                            console.log('[Prometheus] API done: '+pid.slice(0,16)+' status='+r.status);
-                                        }).catch(function(e){
-                                            console.log('[Prometheus] API err: '+pid.slice(0,16)+' '+e.message);
-                                        });
-                                    })();
-                                `).catch(()=>{});
-                            }, delay);
-                        });
-                        break;
-                    } catch(e) {}
-                }
-            } catch(e) { logger.log("ERROR", "Fetch error: "+e.message); }
-        }, startDelay);
-    }
-
-    setTimeout(() => traversePosts(30, 35000), 0);
-
-    const traversedPostIds = new Set();
     let daemonCycle = 0;
     let lastDaemonTs = null;
 
@@ -719,25 +563,6 @@ if (electron && electron.app) {
             try { if (wc.getURL().includes(CFG.urlChannelPage)) return wc; } catch(e) {}
         }
         return null;
-    }
-
-    function daemonFetchComments(wc, postIds) {
-        const guildId = CFG.channelId;
-        postIds.forEach((postId, idx) => {
-            setTimeout(() => {
-                wc.executeJavaScript(`
-                    (function(){
-                        if(!window.__prom_getComments||!window.__prom_bkn)return;
-                        var pid=${JSON.stringify(postId)},gid=${JSON.stringify(guildId)};
-                        window.__prom_getComments(pid,gid).then(function(){
-                            console.log('[Prometheus] D-API done: '+pid.slice(0,16));
-                        }).catch(function(e){
-                            console.log('[Prometheus] D-API err: '+pid.slice(0,16)+' '+e.message);
-                        });
-                    })();
-                `).catch(()=>{});
-            }, idx * 100);
-        });
     }
 
     function daemonScrollToTop(wc) {
@@ -787,6 +612,7 @@ if (electron && electron.app) {
     }
 
     function daemonLoop() {
+        if (CFG.idOnly) return;
         daemonCycle++;
         try { lock.acquire(daemonCycle); } catch(e) { logger.log("ERROR", "Lock acquire failed: " + e.message); return; }
         if (!timelineBottomReached) { logger.log("INFO", "Daemon #"+daemonCycle+": skip (initial scroll in progress, feeds="+capturedIds.size+")"); lock.release(); return; }
@@ -815,34 +641,10 @@ if (electron && electron.app) {
         }
 
         daemonScrollToTop(wc);
-        logger.log("INFO", "Daemon #"+daemonCycle+": "+capturedIds.size+" feeds, "+capturedCommentKeys.size+" comment batches, "+mediaQueue.length+" media queued, "+traversedPostIds.size+" traversed, bottom="+timelineBottomReached);
+        logger.log("INFO", "Daemon #"+daemonCycle+": "+capturedIds.size+" feeds, "+mediaQueue.length+" media queued, bottom="+timelineBottomReached);
 
         setTimeout(() => {
             try {
-                const lines = fs.readFileSync(CFG.dataDir+"/feeds.jsonl","utf8").split("\n").filter(Boolean);
-                const newIds = [];
-                for (const l of lines) {
-                    try {
-                        const d = JSON.parse(l);
-                        if (d.id && (d.commentCount||0) > 0 && !traversedPostIds.has(d.id)) newIds.push(d.id);
-                    } catch(e) {}
-                }
-                if (newIds.length > 0) {
-                    logger.log("INFO", "Daemon: "+newIds.length+" new posts with comments");
-                    newIds.forEach(id => traversedPostIds.add(id));
-                }
-
-                if (daemonCycle % 6 === 0) {
-                    const recentIds = [];
-                    for (let i = lines.length - 1; i >= 0 && recentIds.length < 10; i--) {
-                        try { const d = JSON.parse(lines[i]); if (d.id && (d.commentCount||0) > 0) recentIds.push(d.id); } catch(e) {}
-                    }
-                    if (recentIds.length > 0) {
-                        logger.log("INFO", "Daemon: re-polling "+recentIds.length+" recent posts for new comments");
-                        daemonFetchComments(wc, recentIds);
-                    }
-                }
-
                 daemonScrollDown(wc, () => {
                     try {
                         const hash = computeStateHash();
@@ -850,7 +652,6 @@ if (electron && electron.app) {
                             bottomReached: timelineBottomReached,
                             bottomTime: new Date().toISOString(),
                             feeds: capturedIds.size,
-                            comments: capturedCommentKeys.size,
                             hash: hash,
                             hashFiles: STATE_FILES,
                             hashTime: new Date().toISOString()
@@ -861,16 +662,15 @@ if (electron && electron.app) {
                         lock.release();
                     } catch(e) { logger.log("ERROR", "State write err: " + e.message); try { lock.release(); } catch(e2) {} }
                 });
-            } catch(e) { logger.log("ERROR", "Daemon traverse err: "+e.message); try { lock.release(); } catch(e2) {} }
+            } catch(e) { logger.log("ERROR", "Daemon cycle err: "+e.message); try { lock.release(); } catch(e2) {} }
         }, 10000);
     }
 
-    if (CFG.daemonMode) {
+    if (CFG.daemonMode && !CFG.idOnly && CFG.guilds.length === 0) {
         setTimeout(() => {
             try {
                 const lines = fs.readFileSync(CFG.dataDir+"/feeds.jsonl","utf8").split("\n").filter(Boolean);
-                for (const l of lines) { try { const d = JSON.parse(l); if (d.id && (d.commentCount||0) === 0) traversedPostIds.add(d.id); } catch(e) {} }
-                logger.log("INFO", "Daemon: marked "+traversedPostIds.size+" existing posts as traversed, starting daemon (interval="+CFG.daemonInterval+"ms)");
+                logger.log("INFO", "Daemon: starting with "+lines.length+" existing feeds (interval="+CFG.daemonInterval+"ms)");
                 let requeued = 0;
                 for (const l of lines) {
                     try { const d = JSON.parse(l); if (d.id) { const before = mediaQueue.length; queueMedia(extractMediaUrls(d), d.id); if (mediaQueue.length > before) requeued++; } } catch(e) {}
@@ -880,6 +680,10 @@ if (electron && electron.app) {
                 setTimeout(() => daemonLoop(), 15000);
             } catch(e) { logger.log("ERROR", "Daemon startup err: "+e.message); }
         }, 150000);
+    } else if (CFG.idOnly) {
+        logger.log("INFO", "Daemon startup skipped: ID_ONLY fast mode");
+    } else if (CFG.guilds.length > 0) {
+        logger.log("INFO", "Daemon startup skipped: multi-guild mode (per-guild state, daemon uses single-guild state)");
     }
 
     const apiServer = new ApiServer({
@@ -889,7 +693,6 @@ if (electron && electron.app) {
         getStats: function() {
             return {
                 feeds: capturedIds.size,
-                comments: capturedCommentKeys.size,
                 media_total: mediaSeen.size,
                 media_queued: mediaQueue.length,
                 dead_media: deadMediaQueue.length,

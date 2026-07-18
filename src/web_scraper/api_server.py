@@ -107,19 +107,16 @@ class APIServer:
                 })
 
             def _handle_stats(self):
+                # G6: stats is authoritative (Daemon._aggregate_stats). outer.store is
+                # None with multi-guild — do NOT re-add a store fallback.
                 stats = outer.stats
-                feeds_count = stats.get("feeds_count", 0)
-                comments_count = stats.get("comments_count", 0)
-                if feeds_count == 0:
-                    feeds_count = len(getattr(outer.store, "_feed_ids", ()) or [])
-                if comments_count == 0:
-                    comments_count = len(getattr(outer.store, "_comment_keys", ()) or [])
                 self._ok({
-                    "feeds_count": feeds_count,
-                    "comments_count": comments_count,
+                    "feeds_count": stats.get("feeds_count", 0),
+                    "comments_count": stats.get("comments_count", 0),
                     "media_count": stats.get("media_count", 0),
                     "last_scan_ts": stats.get("last_scan_ts"),
                     "daemon_running": bool(stats.get("daemon_running", False)),
+                    "guilds": stats.get("guilds", {}),
                 })
 
             def _handle_config_get(self):
@@ -127,12 +124,20 @@ class APIServer:
 
             def _handle_config_put(self):
                 body = self._read_body()
-                if body:
-                    current = outer.stats.setdefault("config", {})
-                    if not isinstance(current, dict):
-                        current = {}
-                    current.update(body)
-                    outer.stats["config"] = current
+                if not body:
+                    self._ok({"updated": True})
+                    return
+                # N6: guilds are managed ONLY via conf/guilds.conf.json.
+                if "guilds" in body:
+                    self._fail(
+                        "guilds cannot be updated via API; edit conf/guilds.conf.json and restart"
+                    )
+                    return
+                current = outer.stats.setdefault("config", {})
+                if not isinstance(current, dict):
+                    current = {}
+                current.update(body)
+                outer.stats["config"] = current
                 self._ok({"updated": True})
 
             def _handle_logs(self, parsed):

@@ -1,4 +1,4 @@
-"""SQLite schema for the viewer backend (feeds / feeds_fts / media / comments / meta)."""
+"""SQLite schema for the viewer backend (feeds / feeds_fts / media / comments / comment_media / meta / guilds)."""
 
 import sqlite3
 
@@ -8,6 +8,7 @@ import sqlite3
 _CREATE_FEEDS = """
 CREATE TABLE IF NOT EXISTS feeds (
     id             TEXT PRIMARY KEY,
+    guild_id       TEXT,
     create_time    INTEGER,
     title_text     TEXT,
     author_nick    TEXT,
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS media (
     url      TEXT,
     type     TEXT,
     size     INTEGER,
+    guild_id TEXT,
     FOREIGN KEY (feed_id) REFERENCES feeds(id)
 )
 """
@@ -46,6 +48,7 @@ _CREATE_COMMENTS = """
 CREATE TABLE IF NOT EXISTS comments (
     id             TEXT PRIMARY KEY,
     feed_id        TEXT NOT NULL,
+    guild_id       TEXT,
     parent_id      TEXT,
     create_time    INTEGER,
     author_nick    TEXT,
@@ -58,10 +61,33 @@ CREATE TABLE IF NOT EXISTS comments (
 )
 """
 
+_CREATE_COMMENT_MEDIA = """
+CREATE TABLE IF NOT EXISTS comment_media (
+    comment_id  TEXT NOT NULL,
+    file        TEXT,
+    url         TEXT,
+    type        TEXT,
+    width       INTEGER,
+    height      INTEGER,
+    size        INTEGER,
+    guild_id    TEXT
+)
+"""
+
 _CREATE_META = """
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
     value  TEXT
+)
+"""
+
+_CREATE_GUILDS = """
+CREATE TABLE IF NOT EXISTS guilds (
+    guild_id      TEXT PRIMARY KEY,
+    guild_number  TEXT,
+    name          TEXT,
+    feeds         INTEGER DEFAULT 0,
+    indexed_at    TEXT
 )
 """
 
@@ -75,6 +101,19 @@ _CREATE_INDEX_MEDIA_FEED_ID = (
 
 _CREATE_INDEX_COMMENTS_FEED_ID = (
     "CREATE INDEX IF NOT EXISTS idx_comments_feed_id ON comments(feed_id)"
+)
+
+_CREATE_INDEX_FEEDS_GUILD_ID = (
+    "CREATE INDEX IF NOT EXISTS idx_feeds_guild_id ON feeds(guild_id)"
+)
+
+_CREATE_INDEX_MEDIA_GUILD_ID = (
+    "CREATE INDEX IF NOT EXISTS idx_media_guild_id ON media(guild_id)"
+)
+
+_CREATE_INDEX_COMMENT_MEDIA_COMMENT_ID = (
+    "CREATE INDEX IF NOT EXISTS idx_comment_media_comment_id "
+    "ON comment_media(comment_id)"
 )
 
 
@@ -91,12 +130,27 @@ def fts5_available(conn: sqlite3.Connection) -> bool:
         return False
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
+    """Add ``column`` to ``table`` via ALTER TABLE if absent (idempotent upgrade).
+
+    On fresh DBs the column already exists in CREATE TABLE — PRAGMA finds it and
+    no ALTER fires. On legacy DBs (pre-multi-guild) the column is added with NULL
+    for existing rows; the indexer's rebuild (plan G11) populates it afterwards.
+    """
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+
 def init_db(db_path: str) -> sqlite3.Connection:
     """Create all viewer tables/indexes at ``db_path`` if absent (idempotent).
 
     FTS5 is created only when supported; the rest of the schema still loads so
     the viewer degrades gracefully on FTS5-less SQLite builds. Returns the open
     connection (caller owns its lifetime).
+
+    For existing databases created before multi-guild support, guild_id columns
+    are added in-place via ALTER TABLE (data preserved, NULL for legacy rows).
     """
     conn = sqlite3.connect(db_path)
     # Enforce FK constraints (off by default in SQLite).
@@ -105,7 +159,25 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.execute(_CREATE_FEEDS)
     conn.execute(_CREATE_MEDIA)
     conn.execute(_CREATE_COMMENTS)
+    conn.execute(_CREATE_COMMENT_MEDIA)
+
+    # Migration: early versions of comment_media had a FK to comments(id).
+    # That caused IntegrityError when comment_media_index.jsonl contained
+    # entries for comments the indexer filtered out (e.g. replies from
+    # legacy _s != "web_api" records). The table is fully rebuilt from
+    # comment_media_index.jsonl on every indexer run, so drop+recreate is
+    # safe and data-loss-free.
+    if conn.execute("PRAGMA foreign_key_list(comment_media)").fetchall():
+        conn.execute("DROP TABLE comment_media")
+        conn.execute(_CREATE_COMMENT_MEDIA)
     conn.execute(_CREATE_META)
+    conn.execute(_CREATE_GUILDS)
+
+    # Idempotent upgrade path: existing DBs (pre-multi-guild) get guild_id
+    # columns added via ALTER TABLE. On fresh DBs these are no-ops.
+    _ensure_column(conn, "feeds", "guild_id", "TEXT")
+    _ensure_column(conn, "comments", "guild_id", "TEXT")
+    _ensure_column(conn, "media", "guild_id", "TEXT")
 
     if fts5_available(conn):
         conn.execute(_CREATE_FEEDS_FTS)
@@ -113,6 +185,9 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.execute(_CREATE_INDEX_FEEDS_CREATE_TIME)
     conn.execute(_CREATE_INDEX_MEDIA_FEED_ID)
     conn.execute(_CREATE_INDEX_COMMENTS_FEED_ID)
+    conn.execute(_CREATE_INDEX_FEEDS_GUILD_ID)
+    conn.execute(_CREATE_INDEX_MEDIA_GUILD_ID)
+    conn.execute(_CREATE_INDEX_COMMENT_MEDIA_COMMENT_ID)
 
     conn.commit()
     return conn

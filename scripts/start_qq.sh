@@ -47,6 +47,17 @@ export HOME="${HOME:-$(eval echo ~)}"
 export YDOTOOL_SOCKET="$PROMETHEUS_YDOTOOL_SOCKET"
 export OZONE_PLATFORM="$PROMETHEUS_OZONE_PLATFORM"
 
+# --- Multi-guild support: parse guilds.conf.json and export to inject.js ---
+if [ -f "$PROJECT_DIR/conf/guilds.conf.json" ]; then
+  GUILDS_JSON=$(python3 -c "import json; print(json.dumps(json.load(open('$PROJECT_DIR/conf/guilds.conf.json'))['guilds']))" 2>/dev/null)
+  if [ -n "$GUILDS_JSON" ]; then
+    export PROMETHEUS_GUILDS_JSON="$GUILDS_JSON"
+    export PROMETHEUS_ID_ONLY=true
+    echo "Guilds:   $PROMETHEUS_GUILDS_JSON"
+    echo "ID_ONLY:  $PROMETHEUS_ID_ONLY"
+  fi
+fi
+
 mkdir -p "$PROMETHEUS_DATA"
 
 echo "=== Prometheus QQ Archive ==="

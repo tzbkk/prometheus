@@ -22,11 +22,12 @@ from src.viewer.backend.api import (
     handle_feed_comments,
     handle_feed_detail,
     handle_feeds,
+    handle_guilds,
     handle_rebuild,
     handle_search,
     handle_stats,
 )
-from src.viewer.backend.indexer import Indexer
+from src.viewer.backend.indexer import Indexer, discover_guilds
 from src.viewer.backend.schema import init_db
 
 _DEFAULT_HOST = "127.0.0.1"  # loopback only — never 0.0.0.0
@@ -91,6 +92,7 @@ class _ViewerHTTPServer(ThreadingHTTPServer):
     data_dir: Optional[Path] = None
     db_path: Optional[str] = None
     db_conn: Optional[sqlite3.Connection] = None
+    rebuild_lock: Optional[threading.Lock] = None
 
 
 class ViewerHandler(BaseHTTPRequestHandler):
@@ -181,6 +183,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 status, body = handle_feed_detail(db_path, rest)
         elif path == "/api/search":
             status, body = handle_search(db_path, query_params)
+        elif path == "/api/guilds":
+            status, body = handle_guilds(db_path)
         elif path == "/api/stats":
             status, body = handle_stats(db_path)
         elif path == "/api/rebuild" and self.command == "POST":
@@ -188,7 +192,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if data_dir is None:
                 self._send_json(500, {"error": "data_dir not configured"})
                 return
-            status, body = handle_rebuild(db_path, str(data_dir))
+            rebuild_lock = getattr(self.server, "rebuild_lock", None)
+            status, body = handle_rebuild(db_path, str(data_dir), rebuild_lock)
         else:
             self._send_json(501, {"ok": False, "data": {}, "error": "not implemented"})
             return
@@ -196,18 +201,34 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self._send_json(status, body)
 
     def _route_media(self, path):
-        filename = path[len("/media/"):]
-        if not self._is_safe_media_name(filename):
+        # G7: /media/<guild_id>/<file> — exactly 2 segments after the prefix.
+        # guild_id must be numeric; filename must be a bare name with no path
+        # separators, NULs, or parent-dir segments. The resolved file must
+        # live under data_dir/<guild_id>/media/.
+        rel = unquote(path[len("/media/"):])
+        parts = rel.split("/", 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            self._send_text(404, "not found")
+            return
+        guild_id, filename = parts
+        if not guild_id.isnumeric():
+            self._send_text(404, "not found")
+            return
+        if "\x00" in filename or "/" in filename or "\\" in filename:
             self._send_text(403, "forbidden")
             return
+        if any(seg == ".." for seg in filename.split("/")):
+            self._send_text(403, "forbidden")
+            return
+
         data_dir = getattr(self.server, "data_dir", None)
         if data_dir is None:
             self._send_text(500, "data dir not configured")
             return
-        media_dir = (data_dir / "media").resolve()
-        full = (media_dir / filename).resolve()
+        guild_media_dir = (data_dir / guild_id / "media").resolve()
+        full = (guild_media_dir / filename).resolve()
         try:
-            full.relative_to(media_dir)
+            full.relative_to(guild_media_dir)
         except ValueError:
             self._send_text(403, "forbidden")
             return
@@ -215,22 +236,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_text(404, "not found")
             return
         self._serve_media(full)
-
-    @staticmethod
-    def _is_safe_media_name(name):
-        """A safe media filename has no path separators, parent refs, or NULs.
-
-        The spec calls for rejecting any ``..`` or ``/`` in the filename
-        following ``/media/`` — a media reference is a bare filename, not a
-        subpath.
-        """
-        if not name:
-            return False
-        if "/" in name or "\\" in name or ".." in name:
-            return False
-        if "\x00" in name:
-            return False
-        return True
 
     _MEDIA_MIMETYPES = {
         ".jpg": "image/jpeg",
@@ -385,7 +390,8 @@ class ViewerServer:
     """
 
     def __init__(self, host=_DEFAULT_HOST, port=_DEFAULT_PORT,
-                 static_dir=None, data_dir=None, db_path=None):
+                 static_dir=None, data_dir=None, db_path=None,
+                 rebuild_lock=None):
         self.host = host
         self.requested_port = port
         self.static_dir = Path(static_dir).resolve() if static_dir else None
@@ -400,6 +406,7 @@ class ViewerServer:
         self.httpd.data_dir = self.data_dir
         self.httpd.db_path = self.db_path
         self.httpd.db_conn = self.db_conn
+        self.httpd.rebuild_lock = rebuild_lock
         # Reflect the actually bound port (supports port=0 for OS-assigned).
         self.port = self.httpd.server_address[1]
         self._shutdown_lock = threading.Lock()
@@ -457,17 +464,24 @@ def main(argv=None):
     data_dir = cfg.get("data_dir", "data")
     db_path = cfg.get("db_path", "db/viewer.db")
 
-    feeds_path = os.path.join(data_dir, "feeds.jsonl")
-    media_index_path = os.path.join(data_dir, "media_index.jsonl")
-    comments_path = os.path.join(data_dir, "comments.jsonl")
     indexer = Indexer(db_path)
-    for _ in indexer.build_incremental(feeds_path, media_index_path):
+    # G1: discover guilds and run incremental index PER guild. After migration
+    # the flat data/feeds.jsonl is gone (moved to data/<guild_id>/feeds.jsonl),
+    # so the old single-path incremental index would find nothing.
+    for _ in indexer.build_incremental_guilds(data_dir):
         pass
-    if os.path.exists(comments_path):
-        for _ in indexer.build_comments_incremental(comments_path):
-            pass
+    for _guild_id, guild_dir in discover_guilds(data_dir):
+        comments_path = str(guild_dir / "comments.jsonl")
+        if os.path.exists(comments_path):
+            for _ in indexer.build_comments_incremental(comments_path):
+                pass
 
     poll_interval = int(cfg.get("poll_interval", 30))
+    # G12: serialize rebuild (full nuke + reindex) vs the poller's incremental
+    # cycle so they cannot observe a half-mutated DB. Both acquire the same
+    # lock; rebuild is held for the full duration, the poller releases between
+    # cycles so a pending rebuild gets the lock on the next iteration.
+    rebuild_lock = threading.Lock()
     poll_stop: threading.Event | None = None
     poll_thread: threading.Thread | None = None
     if poll_interval > 0:
@@ -475,11 +489,14 @@ def main(argv=None):
 
         def _poll_index():
             while not poll_stop.wait(poll_interval):
-                for _ in indexer.build_incremental(feeds_path, media_index_path):
-                    pass
-                if os.path.exists(comments_path):
-                    for _ in indexer.build_comments_incremental(comments_path):
+                with rebuild_lock:
+                    for _ in indexer.build_incremental_guilds(data_dir):
                         pass
+                    for _gid, gdir in discover_guilds(data_dir):
+                        cpath = str(gdir / "comments.jsonl")
+                        if os.path.exists(cpath):
+                            for _ in indexer.build_comments_incremental(cpath):
+                                pass
 
         poll_thread = threading.Thread(target=_poll_index, daemon=True)
         poll_thread.start()
@@ -496,6 +513,7 @@ def main(argv=None):
         static_dir=static_dir,
         data_dir=data_dir,
         db_path=db_path,
+        rebuild_lock=rebuild_lock,
     )
 
     shutdown_event = threading.Event()

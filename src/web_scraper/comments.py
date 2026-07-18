@@ -7,7 +7,9 @@ Comment data is stored in the inject.js-compatible format.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Iterable
@@ -28,7 +30,15 @@ class CommentsScraper:
     key from sorted comment IDs (matching inject.js:145-157).
     """
 
-    def __init__(self, client, store, guild_number: str, max_workers: int = 10):
+    def __init__(
+        self,
+        client,
+        store,
+        guild_number: str,
+        max_workers: int = 10,
+        shared_semaphore: threading.Semaphore | None = None,
+        media_downloader=None,
+    ):
         """Initialize the comments scraper.
 
         Args:
@@ -38,12 +48,29 @@ class CommentsScraper:
                 Carried for completeness; the client itself embeds it in the
                 channelSign body when calling GetFeedComments.
             max_workers: Default ThreadPoolExecutor size for scrape_all().
+            shared_semaphore: Optional ``threading.Semaphore`` used to bound
+                GLOBAL API concurrency across all guild contexts (plan §2.1a / I1).
+                When provided, the semaphore is acquired ONLY around the
+                ``client.get_feed_comments`` network call — not during store
+                writes — so bookkeeping remains parallel. ``None`` (default)
+                preserves single-guild behavior unchanged.
+            media_downloader: Optional :class:`MediaDownloader`. When provided,
+                each newly-fetched comment page has its ``richContents`` images
+                + stickers downloaded and indexed. ``None`` (default) preserves
+                the pre-comment-media behaviour exactly.
         """
         self.client = client
         self.store = store
         self.guild_number = guild_number
         self.max_workers = max_workers
+        self._semaphore = shared_semaphore
+        self._media_downloader = media_downloader
         self._log = logging.getLogger(__name__)
+
+    def _sem_ctx(self):
+        if self._semaphore is None:
+            return contextlib.nullcontext()
+        return self._semaphore
 
     def scrape_feed_comments(self, feed_id: str, total_hint: int | None = None) -> int:
         """Paginate through comments for a single feed.
@@ -63,9 +90,10 @@ class CommentsScraper:
         while pages < _MAX_PAGES_PER_FEED:
             pages += 1
             try:
-                vec_comment, total_num, attch_info = self.client.get_feed_comments(
-                    feed_id, attch_info=attch_info
-                )
+                with self._sem_ctx():
+                    vec_comment, total_num, attch_info = self.client.get_feed_comments(
+                        feed_id, attch_info=attch_info
+                    )
             except Exception:
                 self._log.exception("get_feed_comments failed for feed=%s page=%d", feed_id, pages)
                 break
@@ -88,6 +116,23 @@ class CommentsScraper:
             except Exception:
                 self._log.exception("store.append_comment failed for feed=%s", feed_id)
                 break
+
+            if self._media_downloader:
+                img_count = 0
+                for comment in vec_comment:
+                    try:
+                        img_count += self._media_downloader.download_comment_media(
+                            comment, feed_id=feed_id
+                        )
+                    except Exception:
+                        self._log.exception(
+                            "comment media download failed for feed=%s", feed_id
+                        )
+                if img_count > 0:
+                    self._log.info(
+                        "comment media: feed %s — %d image(s) across %d comment(s)",
+                        feed_id, img_count, len(vec_comment),
+                    )
 
             if is_new:
                 total_new += 1

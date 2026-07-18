@@ -1,11 +1,12 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { useGuild } from '@/lib/guild-context'
 
 /**
- * App chrome: sticky header with title + a working search bar (input + submit),
- * plus a centered max-width content well for route output. Light theme only
- * (white background, gray text) per the T10 spec; dark mode is explicitly out
- * of scope.
+ * App chrome: sticky header with title + guild selector + a working search
+ * bar (input + submit), plus a centered max-width content well for route
+ * output. Light theme only (white background, gray text) per the T10 spec;
+ * dark mode is explicitly out of scope.
  *
  * Search submit navigates to `/search?q={value}` (URL-encoded) and clears the
  * input field. SearchPage reads the `q` param via useSearchParams and feeds it
@@ -14,6 +15,7 @@ import { Link, useNavigate } from 'react-router-dom'
 export function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
+  const { selectedGuild, setSelectedGuild, guilds } = useGuild()
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -33,6 +35,19 @@ export function Layout({ children }: { children: ReactNode }) {
           >
             Prometheus Viewer
           </Link>
+          <select
+            aria-label="选择频道"
+            value={selectedGuild ?? ''}
+            onChange={(e) => setSelectedGuild(e.target.value || null)}
+            className="h-9 max-w-[12rem] truncate rounded border border-gray-300 bg-white px-2 text-sm text-gray-700 outline-none focus:border-gray-400"
+          >
+            <option value="">全部频道</option>
+            {guilds.map((g) => (
+              <option key={g.guild_id} value={g.guild_id}>
+                {g.name ?? g.guild_id}
+              </option>
+            ))}
+          </select>
           <form
             onSubmit={handleSearch}
             role="search"

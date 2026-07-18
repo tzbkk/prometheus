@@ -41,8 +41,15 @@ _COMPLEX_CONFIG_KEYS: frozenset[str] = frozenset(
         "channel_ids",
         "feed_ids",
         "targets",
+        "guilds",
     }
 )
+
+# Per-complex-key human-readable notes shown in the config editor. Keys
+# absent from this map fall back to the generic "complex, edit manually" note.
+_COMPLEX_CONFIG_NOTES: dict[str, str] = {
+    "guilds": "guilds  (edit manually in conf/guilds.conf.json)",
+}
 
 # QQ API field-name fallbacks: the exact keys may vary, so try common aliases.
 _LOG_LIST_KEYS = ("logs", "lines")
@@ -102,6 +109,10 @@ class PrometheusTab(BaseTab):
     }
     PrometheusTab #stats-display {
         padding: 0 2 1 2;
+    }
+    PrometheusTab #guilds-display {
+        padding: 0 2 1 2;
+        color: $text-muted;
     }
     PrometheusTab #daemon-countdown {
         padding: 0 2 1 2;
@@ -186,6 +197,7 @@ class PrometheusTab(BaseTab):
                 "Feeds: -- | Comments: -- | Media: -- | Dead: --",
                 id="stats-display",
             )
+            yield Static("", id="guilds-display", markup=False)
             yield Static("Next scan: ---", id="daemon-countdown")
             yield Static("Configuration", id="config-section-label")
             with VerticalScroll(id="config-scroll"):
@@ -294,6 +306,7 @@ class PrometheusTab(BaseTab):
         stats = data.get("stats")
         if isinstance(stats, dict):
             self._update_stats(stats)
+            self._update_guilds_stats(stats)
             scan_ts = _first(stats, _DAEMON_LAST_KEYS)
             if isinstance(scan_ts, (int, float)) and scan_ts > 0:
                 self._last_daemon_time = float(scan_ts)
@@ -431,6 +444,51 @@ class PrometheusTab(BaseTab):
             except (TypeError, ValueError):
                 pass
 
+    def _update_guilds_stats(self, stats: dict) -> None:
+        """Render the per-guild breakdown under TOTALS.
+
+        Defensive against older scrapers that omit ``stats["guilds"]``: the
+        widget is cleared and stays blank so the TOTALS line above keeps
+        working unchanged (backward-compat §7.3).
+        """
+        widget = self.query_one("#guilds-display", Static)
+        guilds_data = stats.get("guilds", {})
+        if not isinstance(guilds_data, dict) or not guilds_data:
+            widget.update("")
+            return
+
+        config_block = stats.get("config", {})
+        config_guilds = (
+            config_block.get("guilds", []) if isinstance(config_block, dict) else []
+        )
+        guild_names: dict[str, str] = {}
+        if isinstance(config_guilds, list):
+            for g in config_guilds:
+                if isinstance(g, dict) and g.get("guild_id"):
+                    guild_names[str(g["guild_id"])] = g.get("name") or str(g["guild_id"])
+
+        def _feed_count(item: tuple[str, Any]) -> int:
+            _, g = item
+            if not isinstance(g, dict):
+                return 0
+            try:
+                return int(_first(g, _STAT_FEED_KEYS, 0))
+            except (TypeError, ValueError):
+                return 0
+
+        lines: list[str] = []
+        for gid, g in sorted(guilds_data.items(), key=_feed_count, reverse=True):
+            if not isinstance(g, dict):
+                continue
+            name = guild_names.get(str(gid), str(gid))
+            feeds = _first(g, _STAT_FEED_KEYS, "--")
+            comments = _first(g, _STAT_COMMENT_KEYS, "--")
+            media = _first(g, _STAT_MEDIA_KEYS, "--")
+            lines.append(
+                f"  {name} ({gid}): {feeds} feeds | {comments} comments | {media} media"
+            )
+        widget.update("\n".join(lines))
+
     def _set_disconnected(self) -> None:
         widget = self.query_one("#process-status", Static)
         widget.update("[red]✕ DISCONNECTED[/]")
@@ -445,6 +503,10 @@ class PrometheusTab(BaseTab):
         new_widgets: list[Any] = []
         for key in sorted(config.keys()):
             if key in _COMPLEX_CONFIG_KEYS:
+                note = _COMPLEX_CONFIG_NOTES.get(
+                    key, f"{key}  (complex, edit manually)"
+                )
+                new_widgets.append(Label(note, markup=False))
                 continue
             value = config[key]
             field_id = f"config-{key}"
@@ -583,7 +645,7 @@ class PrometheusTab(BaseTab):
         try:
             status = self.launcher_client.get_status()
         except Exception as exc:
-            self.app.call_from_thread(self.app.notify, f"Scraper status failed: {exc}", severity="error")
+            self.app.notify(f"Scraper status failed: {exc}", severity="error")
             return
         running = status.get("scraper") == "running" if isinstance(status, dict) else False
         try:
@@ -594,9 +656,9 @@ class PrometheusTab(BaseTab):
                 self.launcher_client.start_scraper()
                 msg = "Scraper start signal sent"
         except Exception as exc:
-            self.app.call_from_thread(self.app.notify, f"Scraper toggle failed: {exc}", severity="error")
+            self.app.notify(f"Scraper toggle failed: {exc}", severity="error")
             return
-        self.app.call_from_thread(self.app.notify, msg, severity="information")
+        self.app.notify(msg, severity="information")
 
     def _append_logs(self, logs_data: dict) -> None:
         lines = _first(logs_data, _LOG_LIST_KEYS)

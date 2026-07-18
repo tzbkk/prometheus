@@ -89,6 +89,72 @@ class TestPrometheusApiClient(unittest.TestCase):
         self.assertEqual(result, {"triggered": True})
         self.mock_client.trigger_daemon.assert_called_once()
 
+    def test_dashboard_data_has_guilds(self):
+        """get_dashboard_data() surfaces the multi-guild block from /stats.
+
+        Locks the contract that stats["guilds"] (a dict keyed by guild_id)
+        is passed through unchanged so the TUI per-guild block can render.
+        """
+        guilds_block = {
+            "7743321643036658": {
+                "feeds_count": 8840,
+                "comments_count": 29919,
+                "media_count": 58557,
+                "last_scan_ts": 1234567890,
+            }
+        }
+        self.mock_client.get_stats.return_value = {
+            "feeds_count": 8840,
+            "comments_count": 29919,
+            "media_count": 58557,
+            "last_scan_ts": 1234567890,
+            "daemon_running": True,
+            "guilds": guilds_block,
+        }
+        self.mock_client.get_logs.return_value = {"logs": [], "total": 0}
+        self.mock_client.get_config.return_value = {
+            "api_port": 9420,
+            "guilds": [
+                {
+                    "guild_id": "7743321643036658",
+                    "guild_number": "Takagi3channel",
+                    "name": "擅长捉弄的高木同学",
+                }
+            ],
+        }
+
+        result = self.api.get_dashboard_data()
+
+        self.assertEqual(result["stats"]["guilds"], guilds_block)
+        self.assertEqual(
+            result["config"]["guilds"][0]["guild_id"], "7743321643036658"
+        )
+        self.assertNotIn("error", result)
+
+    def test_dashboard_handles_missing_guilds(self):
+        """get_dashboard_data() survives older scrapers that omit stats["guilds"].
+
+        Backward-compat §7.3: the TUI must not crash when the multi-guild
+        block is absent. The dashboard dict still contains stats/logs/config
+        and no error is recorded on the missing key alone.
+        """
+        self.mock_client.get_stats.return_value = {
+            "feeds_count": 10,
+            "comments_count": 5,
+            "media_count": 3,
+            "daemon_running": True,
+        }
+        self.mock_client.get_logs.return_value = {"logs": [], "total": 0}
+        self.mock_client.get_config.return_value = {"api_port": 9420}
+
+        result = self.api.get_dashboard_data()
+
+        self.assertNotIn("guilds", result["stats"])
+        self.assertEqual(result["stats"]["feeds_count"], 10)
+        self.assertEqual(result["logs"], {"logs": [], "total": 0})
+        self.assertEqual(result["config"], {"api_port": 9420})
+        self.assertNotIn("error", result)
+
 
 class TestLauncherApiClient(unittest.TestCase):
     """Test LauncherApiClient wrapper"""

@@ -645,7 +645,7 @@ class PrometheusTab(BaseTab):
         try:
             status = self.launcher_client.get_status()
         except Exception as exc:
-            self.app.call_from_thread(self.app.notify, f"Scraper status failed: {exc}", severity="error")
+            self.app.notify(f"Scraper status failed: {exc}", severity="error")
             return
         running = status.get("scraper") == "running" if isinstance(status, dict) else False
         try:
@@ -656,9 +656,9 @@ class PrometheusTab(BaseTab):
                 self.launcher_client.start_scraper()
                 msg = "Scraper start signal sent"
         except Exception as exc:
-            self.app.call_from_thread(self.app.notify, f"Scraper toggle failed: {exc}", severity="error")
+            self.app.notify(f"Scraper toggle failed: {exc}", severity="error")
             return
-        self.app.call_from_thread(self.app.notify, msg, severity="information")
+        self.app.notify(msg, severity="information")
 
     def _append_logs(self, logs_data: dict) -> None:
         lines = _first(logs_data, _LOG_LIST_KEYS)

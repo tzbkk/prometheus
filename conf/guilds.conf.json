@@ -1,7 +1,6 @@
 {
   "_comment": "Multi-guild scrape targets. Scraper writes to data/<guild_id>/.",
   "guilds": [
-    { "guild_id": "7743321643036658", "guild_number": "Takagi3channel", "name": "擅长捉弄的高木同学" },
-    { "guild_id": "640257054084353934", "guild_number": "pd04723206", "name": "山东省淄博市交友交流群" }
+    { "guild_id": "7743321643036658", "guild_number": "Takagi3channel", "name": "擅长捉弄的高木同学" }
   ]
 }

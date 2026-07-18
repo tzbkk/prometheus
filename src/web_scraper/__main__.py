@@ -283,7 +283,7 @@ def main():
         lock.acquire(cycle=0)
     except LockError as e:
         logger.error("Lock acquire failed: %s", e)
-        sys.exit(1)
+        sys.exit(2)  # exit code 2 = lock conflict, launcher should not auto-restart
     logger.info("Lock acquired (pid=%d)", os.getpid())
 
     if args.once:

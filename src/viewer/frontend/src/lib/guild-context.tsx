@@ -45,7 +45,12 @@ export function GuildProvider({ children }: { children: ReactNode }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [selectedGuild, setSelectedGuildState] = useState<string | null>(() => {
     const fromUrl = searchParams.get(GUILD_QUERY_PARAM)
-    if (fromUrl) return fromUrl
+    if (fromUrl) {
+      // Persist URL-initiated selection so it survives page refreshes after
+      // the user navigates away from the URL that carried the param.
+      writeStoredGuild(fromUrl)
+      return fromUrl
+    }
     return readStoredGuild()
   })
 
@@ -71,10 +76,12 @@ export function GuildProvider({ children }: { children: ReactNode }) {
     [setSearchParams],
   )
 
-  // If the URL gains/loses `?g=` from browser navigation, sync inward.
+  // Sync URL → state (inbound only — the URL is a hint, not an authority).
+  // Never clear the selection just because the current page omits ?g=;
+  // the guild picker must persist across navigations.
   useEffect(() => {
     const fromUrl = searchParams.get(GUILD_QUERY_PARAM)
-    if ((fromUrl ?? null) !== selectedGuild) {
+    if (fromUrl !== null && fromUrl !== selectedGuild) {
       setSelectedGuildState(fromUrl)
       writeStoredGuild(fromUrl)
     }

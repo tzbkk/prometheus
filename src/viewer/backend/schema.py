@@ -70,8 +70,7 @@ CREATE TABLE IF NOT EXISTS comment_media (
     width       INTEGER,
     height      INTEGER,
     size        INTEGER,
-    guild_id    TEXT,
-    FOREIGN KEY (comment_id) REFERENCES comments(id)
+    guild_id    TEXT
 )
 """
 
@@ -161,6 +160,16 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.execute(_CREATE_MEDIA)
     conn.execute(_CREATE_COMMENTS)
     conn.execute(_CREATE_COMMENT_MEDIA)
+
+    # Migration: early versions of comment_media had a FK to comments(id).
+    # That caused IntegrityError when comment_media_index.jsonl contained
+    # entries for comments the indexer filtered out (e.g. replies from
+    # legacy _s != "web_api" records). The table is fully rebuilt from
+    # comment_media_index.jsonl on every indexer run, so drop+recreate is
+    # safe and data-loss-free.
+    if conn.execute("PRAGMA foreign_key_list(comment_media)").fetchall():
+        conn.execute("DROP TABLE comment_media")
+        conn.execute(_CREATE_COMMENT_MEDIA)
     conn.execute(_CREATE_META)
     conn.execute(_CREATE_GUILDS)
 

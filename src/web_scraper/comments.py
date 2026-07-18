@@ -118,15 +118,21 @@ class CommentsScraper:
                 break
 
             if self._media_downloader:
+                img_count = 0
                 for comment in vec_comment:
                     try:
-                        self._media_downloader.download_comment_media(
+                        img_count += self._media_downloader.download_comment_media(
                             comment, feed_id=feed_id
                         )
                     except Exception:
                         self._log.exception(
                             "comment media download failed for feed=%s", feed_id
                         )
+                if img_count > 0:
+                    self._log.info(
+                        "comment media: feed %s — %d image(s) across %d comment(s)",
+                        feed_id, img_count, len(vec_comment),
+                    )
 
             if is_new:
                 total_new += 1

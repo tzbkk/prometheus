@@ -27,6 +27,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.viewer.backend.api import (  # noqa: E402
+    handle_feed_comments,
     handle_feed_detail,
     handle_feeds,
     handle_guilds,
@@ -67,6 +68,27 @@ def _insert_guild(conn, guild_id, guild_number, name, feeds):
         "INSERT INTO guilds (guild_id, guild_number, name, feeds, indexed_at) "
         "VALUES (?, ?, ?, ?, ?)",
         (guild_id, guild_number, name, feeds, "2024-01-01T00:00:00Z"),
+    )
+
+
+def _insert_comment(conn, comment_id, feed_id, guild_id, text="hello",
+                    sequence=1, parent_id=None):
+    conn.execute(
+        "INSERT INTO comments (id, feed_id, guild_id, parent_id, create_time, "
+        "author_nick, author_avatar, content_text, ip_location, like_count, "
+        "reply_count, sequence) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (comment_id, feed_id, guild_id, parent_id, 1000, "nick", "avatar",
+         text, "loc", 0, 0, sequence),
+    )
+
+
+def _insert_comment_media(conn, comment_id, file_, url, type_="image",
+                          width=800, height=600, size=100, guild_id="111"):
+    conn.execute(
+        "INSERT INTO comment_media (comment_id, file, url, type, width, height, "
+        "size, guild_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (comment_id, file_, url, type_, width, height, size, guild_id),
     )
 
 
@@ -337,6 +359,65 @@ class TestMediaRouting(unittest.TestCase):
 
     def test_rejects_nonexistent_file(self):
         status, _ = self._get("/media/111/doesnotexist.jpg")
+        self.assertEqual(status, 404)
+
+
+class TestHandleFeedCommentsMedia(unittest.TestCase):
+    """handle_feed_comments returns a `media` array per comment."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self._tmp.name, "test.db")
+        _build_db(self.db_path, feeds=[
+            {"feed_id": "B_f1", "guild_id": "111", "title": "feed"},
+        ])
+        conn = init_db(self.db_path)
+        _insert_comment(conn, "C_a", "B_f1", "111", text="with media",
+                        sequence=1)
+        _insert_comment(conn, "C_b", "B_f1", "111", text="no media",
+                        sequence=2)
+        _insert_comment_media(
+            conn, "C_a", "a.jpg", "http://x/a.jpg",
+            type_="image", width=800, height=600, size=12345, guild_id="111",
+        )
+        _insert_comment_media(
+            conn, "C_a", "a2.jpg", "http://x/a2.jpg",
+            type_="image", width=400, height=300, size=6789, guild_id="111",
+        )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_comments_carry_media_array(self):
+        status, body = handle_feed_comments(self.db_path, "B_f1")
+        self.assertEqual(status, 200)
+        comments = _body_as_list((status, body))
+        by_id = {c["id"]: c for c in comments}
+        self.assertEqual(by_id["C_a"]["media"], [
+            {"file": "a.jpg", "url": "http://x/a.jpg", "type": "image",
+             "width": 800, "height": 600},
+            {"file": "a2.jpg", "url": "http://x/a2.jpg", "type": "image",
+             "width": 400, "height": 300},
+        ])
+
+    def test_comment_without_media_returns_empty_array(self):
+        status, body = handle_feed_comments(self.db_path, "B_f1")
+        comments = _body_as_list((status, body))
+        by_id = {c["id"]: c for c in comments}
+        self.assertEqual(by_id["C_b"]["media"], [])
+
+    def test_feed_with_no_comments_returns_empty_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "test.db")
+            _build_db(db_path, feeds=[{"feed_id": "B_x", "guild_id": "111"}])
+            status, body = handle_feed_comments(db_path, "B_x")
+            self.assertEqual(status, 200)
+            self.assertEqual(_body_as_list((status, body)), [])
+
+    def test_missing_feed_id_returns_404(self):
+        status, body = handle_feed_comments(self.db_path, "")
         self.assertEqual(status, 404)
 
 

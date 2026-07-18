@@ -109,6 +109,7 @@ class Indexer:
         conn = init_db(self.db_path)
         conn.execute("PRAGMA journal_mode=WAL")
         if guild_id is None:
+            conn.execute("DELETE FROM comment_media")
             conn.execute("DELETE FROM media")
             conn.execute("DELETE FROM feeds_fts")
             conn.execute("DELETE FROM feeds")
@@ -119,6 +120,7 @@ class Indexer:
                 "(SELECT id FROM feeds WHERE guild_id = ?)",
                 (guild_id,),
             )
+            conn.execute("DELETE FROM comment_media WHERE guild_id = ?", (guild_id,))
             conn.execute("DELETE FROM media WHERE guild_id = ?", (guild_id,))
             conn.execute("DELETE FROM comments WHERE guild_id = ?", (guild_id,))
             conn.execute("DELETE FROM feeds WHERE guild_id = ?", (guild_id,))
@@ -242,6 +244,89 @@ class Indexer:
                         by_url[url] = entry
             media_map[source] = list(by_url.values())
         return media_map
+
+    def _load_comment_media_map(
+        self, comment_media_index_path: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Load comment_media_index.jsonl, dedup by (comment_id, url).
+
+        The scraper ALWAYS writes an index entry per call even when the file
+        was already on disk (cross-call idempotency at the network level
+        only). The same (comment_id, url) can therefore appear many times;
+        we keep the entry with the largest ``size`` — that is the one whose
+        file was actually fetched (size>0) rather than a placeholder.
+        """
+        raw_entries: List[Dict[str, Any]] = []
+        try:
+            with open(comment_media_index_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        raw_entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except FileNotFoundError:
+            pass
+
+        best: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for entry in raw_entries:
+            key = (entry.get("comment_id", ""), entry.get("url", ""))
+            existing = best.get(key)
+            if existing is None or entry.get("size", 0) > existing.get("size", 0):
+                best[key] = entry
+
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for entry in best.values():
+            cid = entry.get("comment_id", "")
+            if cid:
+                result.setdefault(cid, []).append(entry)
+        return result
+
+    def _index_comment_media(
+        self,
+        conn: sqlite3.Connection,
+        comment_media_index_path: str,
+        guild_id: Optional[str] = None,
+    ) -> None:
+        """Replace comment_media rows for this guild from the JSONL index.
+
+        Must be called AFTER comment rows are flushed so the FK to
+        comments(id) holds under PRAGMA foreign_keys = ON.
+        """
+        media_map = self._load_comment_media_map(comment_media_index_path)
+
+        if guild_id is None:
+            conn.execute("DELETE FROM comment_media")
+        else:
+            conn.execute(
+                "DELETE FROM comment_media WHERE guild_id = ?", (guild_id,)
+            )
+
+        rows: List[tuple] = []
+        for comment_id, entries in media_map.items():
+            for entry in entries:
+                rows.append(
+                    (
+                        comment_id,
+                        entry.get("file"),
+                        entry.get("url"),
+                        entry.get("type"),
+                        entry.get("width"),
+                        entry.get("height"),
+                        entry.get("size"),
+                        guild_id,
+                    )
+                )
+        if rows:
+            conn.executemany(
+                "INSERT INTO comment_media "
+                "(comment_id, file, url, type, width, height, size, guild_id) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                rows,
+            )
+        conn.commit()
 
     def _read_last_offset(
         self, conn: sqlite3.Connection, guild_id: Optional[str] = None,
@@ -442,14 +527,22 @@ class Indexer:
         conn = init_db(self.db_path)
         conn.execute("PRAGMA journal_mode=WAL")
         if guild_id is None:
+            conn.execute("DELETE FROM comment_media")
             conn.execute("DELETE FROM comments")
         else:
+            conn.execute(
+                "DELETE FROM comment_media WHERE guild_id = ?", (guild_id,)
+            )
             conn.execute("DELETE FROM comments WHERE guild_id = ?", (guild_id,))
         conn.commit()
         try:
             yield from self._index_comments(
                 conn, comments_path, start_offset=0, guild_id=guild_id,
             )
+            comment_media_path = str(
+                Path(comments_path).parent / "comment_media_index.jsonl"
+            )
+            self._index_comment_media(conn, comment_media_path, guild_id)
         finally:
             conn.close()
 
@@ -480,6 +573,10 @@ class Indexer:
             yield from self._index_comments(
                 conn, comments_path, start_offset, guild_id=guild_id,
             )
+            comment_media_path = str(
+                Path(comments_path).parent / "comment_media_index.jsonl"
+            )
+            self._index_comment_media(conn, comment_media_path, guild_id)
         finally:
             conn.close()
 

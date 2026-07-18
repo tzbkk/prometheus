@@ -97,7 +97,7 @@ def handle_feeds(db_path: str, query_params: Dict[str, List[str]]) -> HandlerRes
 
 
 def handle_feed_comments(db_path: str, feed_id: str) -> HandlerResult:
-    """GET /api/feed/<id>/comments — list comments for a feed."""
+    """GET /api/feed/<id>/comments — list comments with inline ``media`` array."""
     if not feed_id:
         return 404, {"error": "not found"}
     conn = sqlite3.connect(db_path)
@@ -110,9 +110,31 @@ def handle_feed_comments(db_path: str, feed_id: str) -> HandlerResult:
             "FROM comments WHERE feed_id = ? ORDER BY sequence",
             (feed_id,),
         ).fetchall()
+
+        comment_ids = [row["id"] for row in rows]
+        media_by_comment: Dict[str, List[Dict[str, Any]]] = {}
+        if comment_ids:
+            placeholders = ",".join("?" * len(comment_ids))
+            media_rows = conn.execute(
+                f"SELECT comment_id, file, url, type, width, height "
+                f"FROM comment_media WHERE comment_id IN ({placeholders})",
+                tuple(comment_ids),
+            ).fetchall()
+            for m in media_rows:
+                media_by_comment.setdefault(m["comment_id"], []).append({
+                    "file": m["file"],
+                    "url": m["url"],
+                    "type": m["type"],
+                    "width": m["width"],
+                    "height": m["height"],
+                })
     finally:
         conn.close()
-    return 200, [_row_to_dict(r) for r in rows]
+
+    comments = [_row_to_dict(r) for r in rows]
+    for comment in comments:
+        comment["media"] = media_by_comment.get(comment["id"], [])
+    return 200, comments
 
 
 def handle_feed_detail(db_path: str, feed_id: str) -> HandlerResult:

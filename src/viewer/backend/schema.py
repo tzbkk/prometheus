@@ -1,4 +1,4 @@
-"""SQLite schema for the viewer backend (feeds / feeds_fts / media / comments / meta / guilds)."""
+"""SQLite schema for the viewer backend (feeds / feeds_fts / media / comments / comment_media / meta / guilds)."""
 
 import sqlite3
 
@@ -61,6 +61,20 @@ CREATE TABLE IF NOT EXISTS comments (
 )
 """
 
+_CREATE_COMMENT_MEDIA = """
+CREATE TABLE IF NOT EXISTS comment_media (
+    comment_id  TEXT NOT NULL,
+    file        TEXT,
+    url         TEXT,
+    type        TEXT,
+    width       INTEGER,
+    height      INTEGER,
+    size        INTEGER,
+    guild_id    TEXT,
+    FOREIGN KEY (comment_id) REFERENCES comments(id)
+)
+"""
+
 _CREATE_META = """
 CREATE TABLE IF NOT EXISTS meta (
     key    TEXT PRIMARY KEY,
@@ -96,6 +110,11 @@ _CREATE_INDEX_FEEDS_GUILD_ID = (
 
 _CREATE_INDEX_MEDIA_GUILD_ID = (
     "CREATE INDEX IF NOT EXISTS idx_media_guild_id ON media(guild_id)"
+)
+
+_CREATE_INDEX_COMMENT_MEDIA_COMMENT_ID = (
+    "CREATE INDEX IF NOT EXISTS idx_comment_media_comment_id "
+    "ON comment_media(comment_id)"
 )
 
 
@@ -141,6 +160,7 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.execute(_CREATE_FEEDS)
     conn.execute(_CREATE_MEDIA)
     conn.execute(_CREATE_COMMENTS)
+    conn.execute(_CREATE_COMMENT_MEDIA)
     conn.execute(_CREATE_META)
     conn.execute(_CREATE_GUILDS)
 
@@ -158,6 +178,7 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn.execute(_CREATE_INDEX_COMMENTS_FEED_ID)
     conn.execute(_CREATE_INDEX_FEEDS_GUILD_ID)
     conn.execute(_CREATE_INDEX_MEDIA_GUILD_ID)
+    conn.execute(_CREATE_INDEX_COMMENT_MEDIA_COMMENT_ID)
 
     conn.commit()
     return conn

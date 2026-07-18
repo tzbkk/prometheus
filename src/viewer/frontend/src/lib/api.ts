@@ -54,6 +54,15 @@ export interface FeedDetail extends Feed {
   media?: Media[]
 }
 
+/** A single comment media entry (image/sticker attached to a comment). */
+export interface CommentMedia {
+  file: string | null
+  url: string | null
+  type: string | null
+  width: number | null
+  height: number | null
+}
+
 /** A single comment, as returned by GET /api/feed/<id>/comments. */
 export interface Comment {
   id: string
@@ -66,6 +75,8 @@ export interface Comment {
   reply_count: number
   parent_id: string | null
   sequence: number | null
+  /** Inline image attachments (comment images feature). */
+  media?: CommentMedia[]
 }
 
 /** Stats summary, as returned by GET /api/stats. */

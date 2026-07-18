@@ -346,5 +346,36 @@ class TestMultiGuildSchema(unittest.TestCase):
             conn.close()
 
 
+class TestCommentMediaSchema(unittest.TestCase):
+    def test_comment_media_table_columns(self):
+        conn = init_db(":memory:")
+        try:
+            cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(comment_media)"
+            ).fetchall()}
+            expected = {
+                "comment_id", "file", "url", "type",
+                "width", "height", "size", "guild_id",
+            }
+            self.assertEqual(cols, expected)
+        finally:
+            conn.close()
+
+    def test_comment_media_index_exists(self):
+        conn = init_db(":memory:")
+        try:
+            indexes = _index_names(conn)
+            self.assertIn("idx_comment_media_comment_id", indexes)
+        finally:
+            conn.close()
+
+    def test_comment_media_table_in_table_list(self):
+        conn = init_db(":memory:")
+        try:
+            self.assertIn("comment_media", _table_names(conn))
+        finally:
+            conn.close()
+
+
 if __name__ == "__main__":
     unittest.main()

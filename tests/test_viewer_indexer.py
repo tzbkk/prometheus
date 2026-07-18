@@ -590,5 +590,202 @@ class TestGuildNamesEnrichedFromConf(unittest.TestCase):
             tmp.cleanup()
 
 
+def _make_comment_payload(feed_id, comments):
+    """Build a single comments.jsonl line dict shaped like the scraper output.
+
+    The scraper writes one ``{"_s": "web_api", "d": {...}}`` record per feed
+    page; the indexer filters on ``_s == "web_api"``.
+    """
+    return {"_s": "web_api", "d": {"feedId": feed_id, "vecComment": comments}}
+
+
+def _make_comment(comment_id, text="hello", reply_count=0):
+    return {
+        "id": comment_id,
+        "createTime": 1700000000,
+        "postUser": {"nick": "user", "icon": {"iconUrl": "http://avatar/x.png"}},
+        "richContents": {
+            "contents": [{"text_content": {"text": text}}],
+            "ip_location_province": "Mars",
+        },
+        "likeInfo": {"count": 0},
+        "replyCount": reply_count,
+        "sequence": 1,
+    }
+
+
+class TestLoadCommentMediaMap(unittest.TestCase):
+    """_load_comment_media_map dedups by (comment_id, url), keeping max size."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = self._tmp.name
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        self.indexer = Indexer(self.db_path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write(self, entries):
+        path = os.path.join(self.tmpdir, "comment_media_index.jsonl")
+        _write_jsonl(path, entries)
+        return path
+
+    def test_dedup_keeps_largest_size(self):
+        path = self._write([
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 0},
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 12345},
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 100},
+        ])
+        result = self.indexer._load_comment_media_map(path)
+        self.assertEqual(list(result.keys()), ["C1"])
+        self.assertEqual(len(result["C1"]), 1)
+        self.assertEqual(result["C1"][0]["size"], 12345)
+
+    def test_distinct_urls_kept_separately(self):
+        path = self._write([
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 1, "height": 1, "size": 10},
+            {"comment_id": "C1", "url": "http://x/b.jpg", "file": "b.jpg",
+             "type": "image", "width": 2, "height": 2, "size": 20},
+        ])
+        result = self.indexer._load_comment_media_map(path)
+        self.assertEqual(len(result["C1"]), 2)
+
+    def test_distinct_comments_kept_separately(self):
+        path = self._write([
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 1, "height": 1, "size": 10},
+            {"comment_id": "C2", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 1, "height": 1, "size": 10},
+        ])
+        result = self.indexer._load_comment_media_map(path)
+        self.assertEqual(set(result.keys()), {"C1", "C2"})
+
+    def test_missing_file_returns_empty(self):
+        result = self.indexer._load_comment_media_map(
+            os.path.join(self.tmpdir, "nonexistent.jsonl")
+        )
+        self.assertEqual(result, {})
+
+    def test_malformed_lines_skipped(self):
+        path = os.path.join(self.tmpdir, "comment_media_index.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"comment_id": "C1", "url": "http://x/a.jpg",
+                                "file": "a.jpg", "type": "image",
+                                "width": 1, "height": 1, "size": 10}) + "\n")
+            f.write("{not json}\n")
+            f.write("\n")
+        result = self.indexer._load_comment_media_map(path)
+        self.assertEqual(list(result.keys()), ["C1"])
+
+
+class TestBuildCommentsMedia(unittest.TestCase):
+    """build_comments populates comment_media after flushing comment rows."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = self._tmp.name
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        self.comments_path = os.path.join(self.tmpdir, "comments.jsonl")
+        self.comment_media_path = os.path.join(
+            self.tmpdir, "comment_media_index.jsonl"
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_build_comments_indexes_comment_media(self):
+        payload = _make_comment_payload("B_f1", [_make_comment("C_a", "hi")])
+        _write_jsonl(self.comments_path, [payload])
+        _write_jsonl(self.comment_media_path, [
+            {"comment_id": "C_a", "feed_id": "B_f1", "url": "http://x/a.jpg",
+             "file": "a.jpg", "type": "image", "width": 800, "height": 600,
+             "size": 12345},
+        ])
+
+        indexer = Indexer(self.db_path)
+        list(indexer.build_comments(self.comments_path, guild_id="111"))
+
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT comment_id, file, url, type, width, height, size, guild_id "
+            "FROM comment_media"
+        ).fetchall()
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        cid, file_, url, type_, w, h, size, gid = rows[0]
+        self.assertEqual(cid, "C_a")
+        self.assertEqual(file_, "a.jpg")
+        self.assertEqual(url, "http://x/a.jpg")
+        self.assertEqual(type_, "image")
+        self.assertEqual(w, 800)
+        self.assertEqual(h, 600)
+        self.assertEqual(size, 12345)
+        self.assertEqual(gid, "111")
+
+    def test_build_comments_dedup_in_comment_media(self):
+        payload = _make_comment_payload("B_f1", [_make_comment("C_a", "hi")])
+        _write_jsonl(self.comments_path, [payload])
+        _write_jsonl(self.comment_media_path, [
+            {"comment_id": "C_a", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 0},
+            {"comment_id": "C_a", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 999},
+            {"comment_id": "C_a", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 5},
+        ])
+
+        indexer = Indexer(self.db_path)
+        list(indexer.build_comments(self.comments_path, guild_id="111"))
+
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT size FROM comment_media WHERE comment_id = 'C_a'"
+        ).fetchall()
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], 999)
+
+    def test_build_comments_missing_media_index_is_no_op(self):
+        payload = _make_comment_payload("B_f1", [_make_comment("C_a", "hi")])
+        _write_jsonl(self.comments_path, [payload])
+
+        indexer = Indexer(self.db_path)
+        list(indexer.build_comments(self.comments_path, guild_id="111"))
+
+        conn = sqlite3.connect(self.db_path)
+        count = conn.execute("SELECT COUNT(*) FROM comment_media").fetchone()[0]
+        comment_count = conn.execute(
+            "SELECT COUNT(*) FROM comments"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(comment_count, 1)
+
+    def test_build_comments_incremental_indexes_comment_media(self):
+        payload = _make_comment_payload("B_f1", [_make_comment("C_a", "hi")])
+        _write_jsonl(self.comments_path, [payload])
+        _write_jsonl(self.comment_media_path, [
+            {"comment_id": "C_a", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 1, "height": 1, "size": 50},
+        ])
+
+        indexer = Indexer(self.db_path)
+        list(indexer.build_comments_incremental(
+            self.comments_path, guild_id="111",
+        ))
+
+        conn = sqlite3.connect(self.db_path)
+        count = conn.execute(
+            "SELECT COUNT(*) FROM comment_media WHERE comment_id = 'C_a'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

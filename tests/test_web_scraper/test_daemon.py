@@ -128,7 +128,7 @@ def test_run_once_calls_feeds_scraper():
     daemon.run_once()
     ctxs[0].feeds_scraper.client.get_guild_channels.assert_called_once()
     ctxs[0].feeds_scraper.client.get_channel_feeds.assert_called_once_with(
-        "635032487", 7, ""
+        "635032487", 0, ""
     )
 
 

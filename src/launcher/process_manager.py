@@ -27,6 +27,7 @@ _DEFAULT_API_PORT = 9420
 _DEFAULT_LAUNCHER_PORT = 9421
 _DEFAULT_VIEWER_PORT = 9422
 _DEFAULT_MAX_RESTARTS = 5
+_LOCK_CONFLICT_EXIT = 2
 _DEFAULT_QQ_SCRIPT = "scripts/start_qq.sh"
 
 
@@ -107,11 +108,28 @@ class ProcessManager:
         proc = self.processes.get(name)
         if proc is None:
             return
-        proc.terminate()
+        if name == "qq":
+            # QQ is in its own session (start_new_session=True); killpg is
+            # needed because Electron spawns child processes that survive
+            # proc.terminate().
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                proc.terminate()
+        else:
+            proc.terminate()
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            if name == "qq":
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    proc.kill()
+            else:
+                proc.kill()
             proc.wait()
         self.processes.pop(name, None)
 
@@ -170,6 +188,8 @@ class ProcessManager:
             if rc is not None:
                 self.processes.pop(name, None)
                 if name == "tui" and rc == 0:
+                    continue
+                if rc == _LOCK_CONFLICT_EXIT:
                     continue
                 self.auto_restart(name)
 

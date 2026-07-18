@@ -110,6 +110,41 @@ class Daemon:
 
         all_feeds: list = []
 
+        # Fetch from GetGuildFeeds (main guild feed — returns feeds across
+        # ALL channels with deeper pagination).  GetChannelTimelineFeeds
+        # (below) sometimes omits feeds that GetGuildFeeds includes, so we
+        # run both to maximise coverage.
+        feeds_attch = ""
+        feeds_pages = 0
+        _MAX_FEEDS_PAGES = 100
+        while feeds_pages < _MAX_FEEDS_PAGES:
+            try:
+                vec_feed, feeds_attch, is_finish = (
+                    ctx.feeds_scraper.client.get_feeds(7, feeds_attch)
+                )
+            except Exception:
+                self._log.exception("GetGuildFeeds failed")
+                break
+            if not vec_feed:
+                break
+            page_new = 0
+            for feed in vec_feed:
+                if not ctx.feeds_scraper._accepts(feed):
+                    continue
+                all_feeds.append(feed)
+                if ctx.store.append_feed(feed):
+                    new_feeds += 1
+                    page_new += 1
+                try:
+                    media_count += ctx.media_downloader.download_feed_media(feed)
+                except Exception:
+                    self._log.exception(
+                        "media download failed for feed=%s", feed.get("id")
+                    )
+            feeds_pages += 1
+            if page_new == 0 or is_finish or not feeds_attch:
+                break
+
         # Collect feeds from ALL guild channels via GetChannelTimelineFeeds.
         # pd.qq.com uses this endpoint for each channel tab; GetGuildFeeds
         # alone only returns the default channel (帖子广场).

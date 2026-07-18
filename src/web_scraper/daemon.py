@@ -120,7 +120,7 @@ class Daemon:
         while feeds_pages < _MAX_FEEDS_PAGES:
             try:
                 vec_feed, feeds_attch, is_finish = (
-                    ctx.feeds_scraper.client.get_feeds(7, feeds_attch)
+                    ctx.feeds_scraper.client.get_feeds(0, feeds_attch)
                 )
             except Exception:
                 self._log.exception("GetGuildFeeds failed")
@@ -166,7 +166,7 @@ class Daemon:
                 try:
                     vec_feed, ch_attch, finish = (
                         ctx.feeds_scraper.client.get_channel_feeds(
-                            ch_id, 7, ch_attch
+                            ch_id, 0, ch_attch
                         )
                     )
                 except Exception:

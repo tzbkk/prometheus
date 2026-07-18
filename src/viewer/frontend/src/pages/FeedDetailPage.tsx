@@ -108,19 +108,25 @@ function FeedDetailContent({ feed }: FeedDetailContentProps) {
           </p>
         )}
 
-        <MediaGrid media={media} />
+        <MediaGrid media={media} guildId={feed.guild_id} />
 
         {media.length === 0 && !feed.title_text && (
           <p className="mt-4 text-sm text-gray-400">暂无内容</p>
         )}
       </article>
 
-      <CommentSection feedId={feed.id} />
+      <CommentSection feedId={feed.id} guildId={feed.guild_id} />
     </div>
   )
 }
 
-function CommentSection({ feedId }: { feedId: string }) {
+function CommentSection({
+  feedId,
+  guildId,
+}: {
+  feedId: string
+  guildId: string
+}) {
   const { data, isLoading } = useComments(feedId)
   const count = data?.length ?? 0
 
@@ -139,7 +145,7 @@ function CommentSection({ feedId }: { feedId: string }) {
       ) : !data || data.length === 0 ? (
         <p className="py-6 text-center text-sm text-gray-400">暂无评论</p>
       ) : (
-        <CommentList comments={data} />
+        <CommentList comments={data} guildId={guildId} />
       )}
     </section>
   )

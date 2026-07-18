@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import type { Comment } from '@/lib/api'
+import { mediaUrl, type Comment } from '@/lib/api'
+import { Lightbox } from '@/components/Lightbox'
 
 interface CommentListProps {
   comments: Comment[]
+  guildId: string
 }
 
 function formatTime(unixSeconds: number | null): string {
@@ -18,10 +20,14 @@ function formatTime(unixSeconds: number | null): string {
 
 function CommentItem({
   comment,
+  guildId,
   isReply = false,
+  onImageClick,
 }: {
   comment: Comment
+  guildId: string
   isReply?: boolean
+  onImageClick: (src: string) => void
 }) {
   const [avatarError, setAvatarError] = useState(false)
   const firstLetter = comment.author_nick?.charAt(0) ?? '?'
@@ -63,6 +69,24 @@ function CommentItem({
               {comment.content_text}
             </p>
           )}
+          {comment.media && comment.media.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {comment.media.map((m, i) => {
+                const src = mediaUrl(guildId, m.file) ?? m.url ?? ''
+                if (!src) return null
+                return (
+                  <img
+                    key={i}
+                    src={src}
+                    alt=""
+                    loading="lazy"
+                    onClick={() => onImageClick(src)}
+                    className="max-h-32 cursor-zoom-in rounded object-cover"
+                  />
+                )
+              })}
+            </div>
+          )}
           {showFooter && (
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400">
               {comment.ip_location && (
@@ -78,7 +102,9 @@ function CommentItem({
   )
 }
 
-export function CommentList({ comments }: CommentListProps) {
+export function CommentList({ comments, guildId }: CommentListProps) {
+  const [lightbox, setLightbox] = useState<string | null>(null)
+
   if (comments.length === 0) {
     return (
       <p className="py-6 text-center text-sm text-gray-400">暂无评论</p>
@@ -97,27 +123,37 @@ export function CommentList({ comments }: CommentListProps) {
   }
 
   return (
-    <div className="space-y-3">
-      {topLevel.map((comment) => {
-        const replies = repliesByParent.get(comment.id) ?? []
-        return (
-          <div key={comment.id}>
-            <CommentItem comment={comment} />
-            {replies.length > 0 && (
-              <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
-                {replies.map((reply) => (
-                  <CommentItem
-                    key={reply.id}
-                    comment={reply}
-                    isReply
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
+    <>
+      <div className="space-y-3">
+        {topLevel.map((comment) => {
+          const replies = repliesByParent.get(comment.id) ?? []
+          return (
+            <div key={comment.id}>
+              <CommentItem
+                comment={comment}
+                guildId={guildId}
+                onImageClick={setLightbox}
+              />
+              {replies.length > 0 && (
+                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
+                  {replies.map((reply) => (
+                    <CommentItem
+                      key={reply.id}
+                      comment={reply}
+                      guildId={guildId}
+                      isReply
+                      onImageClick={setLightbox}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
+    </>
   )
 }
 

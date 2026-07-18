@@ -1,11 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useSearch, flattenSearchResults } from '@/hooks/useSearch'
+import { useGuild } from '@/lib/guild-context'
 import { FeedCard } from '@/components/FeedCard'
 
 export function SearchPage() {
   const [searchParams] = useSearchParams()
   const query = searchParams.get('q') ?? ''
+  const { selectedGuild } = useGuild()
   const {
     data,
     error,
@@ -14,7 +16,7 @@ export function SearchPage() {
     isFetchingNextPage,
     isLoading,
     refetch,
-  } = useSearch(query)
+  } = useSearch(query, undefined, selectedGuild)
   const sentinelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

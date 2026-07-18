@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import type { Media } from '@/lib/api'
+import { mediaUrl, type Media } from '@/lib/api'
+import { Lightbox } from '@/components/Lightbox'
 
 interface MediaGridProps {
   media: Media[]
+  guildId: string
 }
 
-export function MediaGrid({ media }: MediaGridProps) {
+export function MediaGrid({ media, guildId }: MediaGridProps) {
   const [lightbox, setLightbox] = useState<string | null>(null)
 
   if (media.length === 0) return null
@@ -15,7 +17,8 @@ export function MediaGrid({ media }: MediaGridProps) {
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {media.map((item, idx) => {
           if (!item.file) return null
-          const src = `/media/${item.file}`
+          const src = mediaUrl(guildId, item.file)
+          if (!src) return null
           const isVideo = item.type === 'video'
 
           return isVideo ? (
@@ -40,27 +43,7 @@ export function MediaGrid({ media }: MediaGridProps) {
         })}
       </div>
 
-      {lightbox && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
-          onClick={() => setLightbox(null)}
-        >
-          <img
-            src={lightbox}
-            alt="fullsize"
-            className="max-h-full max-w-full object-contain"
-          />
-          <button
-            className="absolute right-4 top-4 rounded-full bg-white/20 px-3 py-1 text-sm text-white hover:bg-white/30"
-            onClick={(e) => {
-              e.stopPropagation()
-              setLightbox(null)
-            }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
     </>
   )
 }

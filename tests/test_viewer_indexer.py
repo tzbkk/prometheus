@@ -12,12 +12,13 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.viewer.backend.indexer import Indexer, extract_author, extract_feed_text  # noqa: E402
+from src.viewer.backend.indexer import Indexer, discover_guilds, extract_author, extract_feed_text  # noqa: E402
 
 
 def _make_feed(
@@ -356,6 +357,434 @@ class TestMediaDedup(unittest.TestCase):
         conn.close()
         self.assertIsNotNone(row)
         self.assertEqual(row[0], "dddd.jpg")
+
+
+class TestDiscoverGuilds(unittest.TestCase):
+    """discover_guilds: scan data_dir/*/feeds.jsonl, numeric guild_ids only (G16)."""
+
+    def test_discover_guilds_finds_numeric_dirs(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            (root / "111").mkdir()
+            (root / "111" / "feeds.jsonl").write_text("{}", encoding="utf-8")
+            (root / "222").mkdir()
+            (root / "222" / "feeds.jsonl").write_text("{}", encoding="utf-8")
+            # non-numeric dir — must be skipped
+            (root / "media").mkdir()
+            (root / "media" / "feeds.jsonl").write_text("{}", encoding="utf-8")
+            # numeric dir WITHOUT feeds.jsonl — must be skipped
+            (root / "333").mkdir()
+            # non-dir entry — must be skipped
+            (root / "444").write_text("not a dir", encoding="utf-8")
+
+            found = discover_guilds(str(root))
+            gids = [g[0] for g in found]
+            self.assertEqual(gids, ["111", "222"])
+            for gid, p in found:
+                self.assertIsInstance(p, Path)
+                self.assertEqual(p.name, gid)
+        finally:
+            tmp.cleanup()
+
+    def test_discover_guilds_missing_dir_returns_empty(self):
+        self.assertEqual(discover_guilds("/nonexistent/path/xyz"), [])
+
+
+class TestBuildAllGuilds(unittest.TestCase):
+    """build_all_guilds: discover + index each guild with correct guild_id tag."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = self._tmp.name
+        self.data_dir = os.path.join(self.tmpdir, "data")
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        os.makedirs(self.data_dir)
+
+        for gid, feed_ids in [("111", ["B_a1", "B_a2"]), ("222", ["B_b1"])]:
+            gdir = os.path.join(self.data_dir, gid)
+            os.makedirs(gdir)
+            feeds = [_make_feed(fid, texts=[f"text-{fid}"]) for fid in feed_ids]
+            _write_jsonl(os.path.join(gdir, "feeds.jsonl"), feeds)
+            _write_jsonl(os.path.join(gdir, "media_index.jsonl"), [])
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _connect(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    def test_build_all_guilds_indexes_all(self):
+        indexer = Indexer(self.db_path)
+        indexer._find_conf_dir = lambda: None  # no conf in tempdir → no-op enrichment
+        list(indexer.build_all_guilds(self.data_dir))
+
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, guild_id FROM feeds ORDER BY guild_id, id"
+            ).fetchall()
+            conn.close()
+        finally:
+            pass
+        self.assertEqual(
+            rows,
+            [("B_a1", "111"), ("B_a2", "111"), ("B_b1", "222")],
+        )
+
+    def test_build_all_guilds_per_guild_feed_counts(self):
+        indexer = Indexer(self.db_path)
+        indexer._find_conf_dir = lambda: None
+        list(indexer.build_all_guilds(self.data_dir))
+
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT guild_id, feeds FROM guilds ORDER BY guild_id"
+        ).fetchall()
+        conn.close()
+        self.assertEqual(rows, [("111", 2), ("222", 1)])
+
+    def test_build_all_guilds_per_guild_offset_keys(self):
+        indexer = Indexer(self.db_path)
+        indexer._find_conf_dir = lambda: None
+        list(indexer.build_all_guilds(self.data_dir))
+
+        conn = self._connect()
+        keys = [r[0] for r in conn.execute(
+            "SELECT key FROM meta WHERE key LIKE 'offset:%' ORDER BY key"
+        ).fetchall()]
+        conn.close()
+        self.assertEqual(keys, ["offset:111", "offset:222"])
+
+    def test_build_all_guilds_media_tagged_with_guild_id(self):
+        media_path = os.path.join(self.data_dir, "111", "media_index.jsonl")
+        _write_jsonl(media_path, [
+            {"url": "http://img/a1.jpg", "file": "a1.jpg", "type": "image",
+             "size": 100, "source": "B_a1"},
+        ])
+        indexer = Indexer(self.db_path)
+        indexer._find_conf_dir = lambda: None
+        list(indexer.build_all_guilds(self.data_dir))
+
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT feed_id, guild_id FROM media WHERE file = 'a1.jpg'"
+        ).fetchone()
+        conn.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], "B_a1")
+        self.assertEqual(row[1], "111")
+
+
+class TestPerGuildOffsetGuard(unittest.TestCase):
+    """B2: new guild B is indexed even when guild A already has rows."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = self._tmp.name
+        self.data_dir = os.path.join(self.tmpdir, "data")
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        os.makedirs(self.data_dir)
+        gdir_a = os.path.join(self.data_dir, "111")
+        os.makedirs(gdir_a)
+        _write_jsonl(
+            os.path.join(gdir_a, "feeds.jsonl"),
+            [_make_feed("B_a1", texts=["alpha"])],
+        )
+        _write_jsonl(os.path.join(gdir_a, "media_index.jsonl"), [])
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_new_guild_indexes_when_other_guild_already_present(self):
+        indexer = Indexer(self.db_path)
+        indexer._find_conf_dir = lambda: None
+        # First pass: only guild A present, indexed fully.
+        list(indexer.build_incremental_guilds(self.data_dir))
+        conn = sqlite3.connect(self.db_path)
+        count_a = conn.execute(
+            "SELECT COUNT(*) FROM feeds WHERE guild_id = '111'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(count_a, 1)
+
+        # Now guild B appears (new dir).
+        gdir_b = os.path.join(self.data_dir, "222")
+        os.makedirs(gdir_b)
+        _write_jsonl(
+            os.path.join(gdir_b, "feeds.jsonl"),
+            [_make_feed("B_b1", texts=["beta"])],
+        )
+        _write_jsonl(os.path.join(gdir_b, "media_index.jsonl"), [])
+
+        # Second incremental pass: B MUST be indexed (B2 — old global guard
+        # would have skipped this because A's rows already exist).
+        list(indexer.build_incremental_guilds(self.data_dir))
+        conn = sqlite3.connect(self.db_path)
+        count_b = conn.execute(
+            "SELECT COUNT(*) FROM feeds WHERE guild_id = '222'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(count_b, 1)
+
+    def test_incremental_idempotent_per_guild(self):
+        indexer = Indexer(self.db_path)
+        indexer._find_conf_dir = lambda: None
+        list(indexer.build_incremental_guilds(self.data_dir))
+        list(indexer.build_incremental_guilds(self.data_dir))
+        conn = sqlite3.connect(self.db_path)
+        count = conn.execute("SELECT COUNT(*) FROM feeds").fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 1)
+
+
+class TestGuildNamesEnrichedFromConf(unittest.TestCase):
+    """G28: conf/guilds.conf.json names are upserted into SQLite guilds table."""
+
+    def test_guild_names_enriched_from_conf(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            tmpdir = tmp.name
+            data_dir = os.path.join(tmpdir, "data")
+            guild_id = "7743321643036658"
+            gdir = os.path.join(data_dir, guild_id)
+            os.makedirs(gdir)
+            _write_jsonl(
+                os.path.join(gdir, "feeds.jsonl"),
+                [_make_feed("B_a", texts=["alpha"])],
+            )
+            _write_jsonl(os.path.join(gdir, "media_index.jsonl"), [])
+
+            conf_dir = os.path.join(tmpdir, "conf")
+            os.makedirs(conf_dir)
+            with open(os.path.join(conf_dir, "guilds.conf.json"),
+                      "w", encoding="utf-8") as f:
+                json.dump({
+                    "guilds": [{
+                        "guild_id": guild_id,
+                        "guild_number": "Takagi3channel",
+                        "name": "TestGuild",
+                    }],
+                }, f)
+
+            db_path = os.path.join(tmpdir, "test.db")
+            indexer = Indexer(db_path)
+            indexer._find_conf_dir = lambda: Path(conf_dir)
+            list(indexer.build_all_guilds(data_dir))
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT guild_id, guild_number, name, feeds FROM guilds "
+                "WHERE guild_id = ?",
+                (guild_id,),
+            ).fetchone()
+            conn.close()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], guild_id)
+            self.assertEqual(row[1], "Takagi3channel")
+            self.assertEqual(row[2], "TestGuild")
+            self.assertEqual(row[3], 1)
+        finally:
+            tmp.cleanup()
+
+
+def _make_comment_payload(feed_id, comments):
+    """Build a single comments.jsonl line dict shaped like the scraper output.
+
+    The scraper writes one ``{"_s": "web_api", "d": {...}}`` record per feed
+    page; the indexer filters on ``_s == "web_api"``.
+    """
+    return {"_s": "web_api", "d": {"feedId": feed_id, "vecComment": comments}}
+
+
+def _make_comment(comment_id, text="hello", reply_count=0):
+    return {
+        "id": comment_id,
+        "createTime": 1700000000,
+        "postUser": {"nick": "user", "icon": {"iconUrl": "http://avatar/x.png"}},
+        "richContents": {
+            "contents": [{"text_content": {"text": text}}],
+            "ip_location_province": "Mars",
+        },
+        "likeInfo": {"count": 0},
+        "replyCount": reply_count,
+        "sequence": 1,
+    }
+
+
+class TestLoadCommentMediaMap(unittest.TestCase):
+    """_load_comment_media_map dedups by (comment_id, url), keeping max size."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = self._tmp.name
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        self.indexer = Indexer(self.db_path)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write(self, entries):
+        path = os.path.join(self.tmpdir, "comment_media_index.jsonl")
+        _write_jsonl(path, entries)
+        return path
+
+    def test_dedup_keeps_largest_size(self):
+        path = self._write([
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 0},
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 12345},
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 100},
+        ])
+        result = self.indexer._load_comment_media_map(path)
+        self.assertEqual(list(result.keys()), ["C1"])
+        self.assertEqual(len(result["C1"]), 1)
+        self.assertEqual(result["C1"][0]["size"], 12345)
+
+    def test_distinct_urls_kept_separately(self):
+        path = self._write([
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 1, "height": 1, "size": 10},
+            {"comment_id": "C1", "url": "http://x/b.jpg", "file": "b.jpg",
+             "type": "image", "width": 2, "height": 2, "size": 20},
+        ])
+        result = self.indexer._load_comment_media_map(path)
+        self.assertEqual(len(result["C1"]), 2)
+
+    def test_distinct_comments_kept_separately(self):
+        path = self._write([
+            {"comment_id": "C1", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 1, "height": 1, "size": 10},
+            {"comment_id": "C2", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 1, "height": 1, "size": 10},
+        ])
+        result = self.indexer._load_comment_media_map(path)
+        self.assertEqual(set(result.keys()), {"C1", "C2"})
+
+    def test_missing_file_returns_empty(self):
+        result = self.indexer._load_comment_media_map(
+            os.path.join(self.tmpdir, "nonexistent.jsonl")
+        )
+        self.assertEqual(result, {})
+
+    def test_malformed_lines_skipped(self):
+        path = os.path.join(self.tmpdir, "comment_media_index.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"comment_id": "C1", "url": "http://x/a.jpg",
+                                "file": "a.jpg", "type": "image",
+                                "width": 1, "height": 1, "size": 10}) + "\n")
+            f.write("{not json}\n")
+            f.write("\n")
+        result = self.indexer._load_comment_media_map(path)
+        self.assertEqual(list(result.keys()), ["C1"])
+
+
+class TestBuildCommentsMedia(unittest.TestCase):
+    """build_comments populates comment_media after flushing comment rows."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = self._tmp.name
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        self.comments_path = os.path.join(self.tmpdir, "comments.jsonl")
+        self.comment_media_path = os.path.join(
+            self.tmpdir, "comment_media_index.jsonl"
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_build_comments_indexes_comment_media(self):
+        payload = _make_comment_payload("B_f1", [_make_comment("C_a", "hi")])
+        _write_jsonl(self.comments_path, [payload])
+        _write_jsonl(self.comment_media_path, [
+            {"comment_id": "C_a", "feed_id": "B_f1", "url": "http://x/a.jpg",
+             "file": "a.jpg", "type": "image", "width": 800, "height": 600,
+             "size": 12345},
+        ])
+
+        indexer = Indexer(self.db_path)
+        list(indexer.build_comments(self.comments_path, guild_id="111"))
+
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT comment_id, file, url, type, width, height, size, guild_id "
+            "FROM comment_media"
+        ).fetchall()
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        cid, file_, url, type_, w, h, size, gid = rows[0]
+        self.assertEqual(cid, "C_a")
+        self.assertEqual(file_, "a.jpg")
+        self.assertEqual(url, "http://x/a.jpg")
+        self.assertEqual(type_, "image")
+        self.assertEqual(w, 800)
+        self.assertEqual(h, 600)
+        self.assertEqual(size, 12345)
+        self.assertEqual(gid, "111")
+
+    def test_build_comments_dedup_in_comment_media(self):
+        payload = _make_comment_payload("B_f1", [_make_comment("C_a", "hi")])
+        _write_jsonl(self.comments_path, [payload])
+        _write_jsonl(self.comment_media_path, [
+            {"comment_id": "C_a", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 0},
+            {"comment_id": "C_a", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 999},
+            {"comment_id": "C_a", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 800, "height": 600, "size": 5},
+        ])
+
+        indexer = Indexer(self.db_path)
+        list(indexer.build_comments(self.comments_path, guild_id="111"))
+
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT size FROM comment_media WHERE comment_id = 'C_a'"
+        ).fetchall()
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], 999)
+
+    def test_build_comments_missing_media_index_is_no_op(self):
+        payload = _make_comment_payload("B_f1", [_make_comment("C_a", "hi")])
+        _write_jsonl(self.comments_path, [payload])
+
+        indexer = Indexer(self.db_path)
+        list(indexer.build_comments(self.comments_path, guild_id="111"))
+
+        conn = sqlite3.connect(self.db_path)
+        count = conn.execute("SELECT COUNT(*) FROM comment_media").fetchone()[0]
+        comment_count = conn.execute(
+            "SELECT COUNT(*) FROM comments"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(comment_count, 1)
+
+    def test_build_comments_incremental_indexes_comment_media(self):
+        payload = _make_comment_payload("B_f1", [_make_comment("C_a", "hi")])
+        _write_jsonl(self.comments_path, [payload])
+        _write_jsonl(self.comment_media_path, [
+            {"comment_id": "C_a", "url": "http://x/a.jpg", "file": "a.jpg",
+             "type": "image", "width": 1, "height": 1, "size": 50},
+        ])
+
+        indexer = Indexer(self.db_path)
+        list(indexer.build_comments_incremental(
+            self.comments_path, guild_id="111",
+        ))
+
+        conn = sqlite3.connect(self.db_path)
+        count = conn.execute(
+            "SELECT COUNT(*) FROM comment_media WHERE comment_id = 'C_a'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":

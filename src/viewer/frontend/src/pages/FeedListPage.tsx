@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useFeeds, flattenFeeds } from '@/hooks/useFeeds'
 import { rebuild } from '@/lib/api'
+import { useGuild } from '@/lib/guild-context'
 import { FeedCard } from '@/components/FeedCard'
 
 export function FeedListPage() {
   const queryClient = useQueryClient()
+  const { selectedGuild } = useGuild()
   const {
     data,
     error,
@@ -14,7 +16,7 @@ export function FeedListPage() {
     isFetchingNextPage,
     isLoading,
     refetch,
-  } = useFeeds()
+  } = useFeeds(undefined, selectedGuild)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const scrollYRef = useRef(0)
 

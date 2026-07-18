@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { mediaUrl, type Comment } from '@/lib/api'
+import { Lightbox } from '@/components/Lightbox'
 
 interface CommentListProps {
   comments: Comment[]
@@ -21,10 +22,12 @@ function CommentItem({
   comment,
   guildId,
   isReply = false,
+  onImageClick,
 }: {
   comment: Comment
   guildId: string
   isReply?: boolean
+  onImageClick: (src: string) => void
 }) {
   const [avatarError, setAvatarError] = useState(false)
   const firstLetter = comment.author_nick?.charAt(0) ?? '?'
@@ -77,7 +80,8 @@ function CommentItem({
                     src={src}
                     alt=""
                     loading="lazy"
-                    className="max-h-32 rounded object-cover"
+                    onClick={() => onImageClick(src)}
+                    className="max-h-32 cursor-zoom-in rounded object-cover"
                   />
                 )
               })}
@@ -99,6 +103,8 @@ function CommentItem({
 }
 
 export function CommentList({ comments, guildId }: CommentListProps) {
+  const [lightbox, setLightbox] = useState<string | null>(null)
+
   if (comments.length === 0) {
     return (
       <p className="py-6 text-center text-sm text-gray-400">暂无评论</p>
@@ -117,28 +123,37 @@ export function CommentList({ comments, guildId }: CommentListProps) {
   }
 
   return (
-    <div className="space-y-3">
-      {topLevel.map((comment) => {
-        const replies = repliesByParent.get(comment.id) ?? []
-        return (
-          <div key={comment.id}>
-            <CommentItem comment={comment} guildId={guildId} />
-            {replies.length > 0 && (
-              <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
-                {replies.map((reply) => (
-                  <CommentItem
-                    key={reply.id}
-                    comment={reply}
-                    guildId={guildId}
-                    isReply
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
+    <>
+      <div className="space-y-3">
+        {topLevel.map((comment) => {
+          const replies = repliesByParent.get(comment.id) ?? []
+          return (
+            <div key={comment.id}>
+              <CommentItem
+                comment={comment}
+                guildId={guildId}
+                onImageClick={setLightbox}
+              />
+              {replies.length > 0 && (
+                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
+                  {replies.map((reply) => (
+                    <CommentItem
+                      key={reply.id}
+                      comment={reply}
+                      guildId={guildId}
+                      isReply
+                      onImageClick={setLightbox}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
+    </>
   )
 }
 

@@ -138,17 +138,18 @@ def _build_components(config: Config):
             )
             store = Store(config.data_dir / guild.guild_id)
             feeds_scraper = FeedsScraper(client, store, guild.guild_id)
+            media_downloader = MediaDownloader(
+                config.data_dir / guild.guild_id,
+                config.scraper_max_workers,
+                shared_semaphore=rate_semaphore,
+            )
             comments_scraper = CommentsScraper(
                 client,
                 store,
                 guild.guild_number,
                 config.scraper_max_workers,
                 shared_semaphore=rate_semaphore,
-            )
-            media_downloader = MediaDownloader(
-                config.data_dir / guild.guild_id,
-                config.scraper_max_workers,
-                shared_semaphore=rate_semaphore,
+                media_downloader=media_downloader,
             )
             ctx = GuildContext(
                 guild=guild,

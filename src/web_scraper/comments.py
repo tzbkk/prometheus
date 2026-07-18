@@ -37,6 +37,7 @@ class CommentsScraper:
         guild_number: str,
         max_workers: int = 10,
         shared_semaphore: threading.Semaphore | None = None,
+        media_downloader=None,
     ):
         """Initialize the comments scraper.
 
@@ -53,12 +54,17 @@ class CommentsScraper:
                 ``client.get_feed_comments`` network call — not during store
                 writes — so bookkeeping remains parallel. ``None`` (default)
                 preserves single-guild behavior unchanged.
+            media_downloader: Optional :class:`MediaDownloader`. When provided,
+                each newly-fetched comment page has its ``richContents`` images
+                + stickers downloaded and indexed. ``None`` (default) preserves
+                the pre-comment-media behaviour exactly.
         """
         self.client = client
         self.store = store
         self.guild_number = guild_number
         self.max_workers = max_workers
         self._semaphore = shared_semaphore
+        self._media_downloader = media_downloader
         self._log = logging.getLogger(__name__)
 
     def _sem_ctx(self):
@@ -110,6 +116,17 @@ class CommentsScraper:
             except Exception:
                 self._log.exception("store.append_comment failed for feed=%s", feed_id)
                 break
+
+            if self._media_downloader:
+                for comment in vec_comment:
+                    try:
+                        self._media_downloader.download_comment_media(
+                            comment, feed_id=feed_id
+                        )
+                    except Exception:
+                        self._log.exception(
+                            "comment media download failed for feed=%s", feed_id
+                        )
 
             if is_new:
                 total_new += 1

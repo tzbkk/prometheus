@@ -1,12 +1,13 @@
 # 数据格式与查询
 
-## 文件总览
+## 文件总览（多频道布局）
 
 | 文件 | 格式 | 内容 |
 |------|------|------|
 | `feeds.jsonl` | JSON Lines | 帖子归档（去重，跨轮幂等） |
 | `comments.jsonl` | JSON Lines | 评论归档（去重，跨轮幂等） |
 | `media_index.jsonl` | JSON Lines | 媒体索引（url → file/source/type/size） |
+| `comment_media_index.jsonl` | JSON Lines | 评论图片索引（comment_id → file/url/type/width/height/size） |
 | `media/` | 二进制文件 | 下载的图片/视频（SHA256 前 16 位命名） |
 | `ids.json` | 纯文本 | 帖子 ID 去重表（每行一个 ID，异步写入，不参与 hash 校验） |
 | `dead_media.jsonl` | JSON Lines | 临时失效媒体队列（重试中，跨重启持久化） |
@@ -14,6 +15,36 @@
 | `state.json` | JSON | 守护状态快照（feeds hash、触底标记） |
 | `prometheus.lock` | JSON | daemon 周期锁 + 崩溃恢复状态 |
 | `prometheus.log` | 纯文本 | 运行日志（`log/prometheus/` 目录） |
+
+### 每频道目录结构
+
+```
+data/
+├── prometheus.lock              # 进程锁（保持在父级，不随频道目录移动）
+├── 7743321643036658/            # 频道目录（guild_id 作为 key）
+│   ├── feeds.jsonl
+│   ├── comments.jsonl
+│   ├── ids.json
+│   ├── comment_keys.json
+│   ├── comments_fetched_ids.json
+│   ├── media_index.jsonl
+│   ├── media_index.jsonl.bak
+│   ├── comment_media_index.jsonl
+│   ├── media/
+│   │   └── <hash>.jpg
+│   ├── state.json
+│   ├── dead_media.jsonl
+│   └── dead_media_permanent.jsonl
+└── <other_guild_id>/
+    └── ... (相同布局)
+```
+
+### 媒体 URL 变更（Breaking Change）
+
+- **旧版**：`/media/<filename>` → `data/media/<filename>`
+- **新版**：`/media/<guild_id>/<filename>` → `data/<guild_id>/media/<filename>`
+
+Viewer 从 `data/<guild_id>/media/<filename>` 服务媒体文件。
 
 ## feeds.jsonl 字段（每条 80+）
 
@@ -70,6 +101,26 @@
 
 Viewer 启动时通过 `build_comments_incremental()` 将 `_s == "web_api"` 的记录索引到 SQLite `comments` 表。嵌套回复通过 `parent_id` 字段关联主评论。
 
+### comment_media_index.jsonl 字段
+
+每行一条 JSON 记录，记录评论图片/贴图的下载映射：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `comment_id` | string | 评论 ID（QQ comment id，如 `C_abc123`） |
+| `feed_id` | string | 所属帖子 ID（如 `B_123`） |
+| `url` | string | 规范化后的 CDN URL（normalize_media_url 处理后） |
+| `file` | string | 本地文件名（SHA256[:16] + 扩展名，与 media/ 目录一致） |
+| `type` | string | `"image"` / `"sticker"` / `"gif"` |
+| `width` | int | 图片宽度（px） |
+| `height` | int | 图片高度（px） |
+| `size` | int | 文件大小（bytes） |
+
+**注意**：
+- 评论图片文件存储在共享的 `media/` 目录中（与帖子媒体共用 SHA256 命名 + `_seen` 去重集合）
+- 此索引文件**不去重**（每次调用 `download_comment_media` 都会追加一行，即使文件已存在）。Viewer 读取时按 `(comment_id, url)` 去重，保留 `size` 最大的条目
+- 嵌套回复（`vecReply`）中的图片也会被下载，`comment_id` 为回复自身的 ID，`feed_id` 为父帖子 ID
+
 ## 常用查询
 
 ```bash
@@ -123,3 +174,19 @@ du -sh data/media/
 - 触发条件：10MB
 - 保留文件数：3 个
 - 命名：`log/prometheus/prometheus.log` → `.log.1` → `.log.2` → `.log.3`
+
+## 扁平布局迁移
+
+从旧版扁平 `data/` 迁移到每频道布局：
+
+```bash
+# 自动迁移（启动时检测旧版结构并迁移）
+python -m src.web_scraper
+
+# 手动迁移
+python scripts/migrate_multi_guild.py [--data-dir <path>] [--guild-id <id>]
+```
+
+- 迁移将所有扁平文件 + `media/` 目录移入 `data/<guild_id>/`
+- `prometheus.lock` 保持在父级
+- 幂等操作：已迁移则无副作用

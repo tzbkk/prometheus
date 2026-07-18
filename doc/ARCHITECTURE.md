@@ -188,6 +188,7 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 │   ├── feeds_fts  FTS5 全文索引（已弃用，搜索改用 LIKE）
 │   ├── media      媒体文件映射（url → local file）
 │   ├── comments   评论（含嵌套回复 parent_id、作者、IP 属地、点赞）
+│   ├── comment_media 评论图片映射（comment_id → file/url/type/width/height/size）
 │   └── meta       last_offset / indexed_at
 ├── 索引器 (indexer.py)
 │   ├── build_all()              全量重建
@@ -237,6 +238,22 @@ Viewer (Python HTTP, 127.0.0.1:9422)
 - **LIKE 代替 FTS5**：FTS5 unicode61 不分词 CJK，中文子串搜索（如"高木"）无结果。LIKE 在 8745 条规模上性能足够。
 - **缩略图过滤**：QQ 每张图有 `picUrl`（原图）+ `vecImageUrl[]`（3-4 级缩略图）。详情 API 仅返回匹配 `images[].picUrl` 的本地文件。
 - **头像过滤**：作者头像 URL（`qlogo.cn`）被媒体下载器捕获，feed 列表缩略图和详情媒体列表均过滤排除。
+- **多频道浏览**：Viewer 扫描所有 `data/*/feeds.jsonl` 目录，即使配置中已删除频道仍可浏览历史数据（G16）。
+- **媒体 URL 路由**：媒体路由改为双段 `/media/<guild_id>/<filename>`，对应 `data/<guild_id>/media/<filename>`（Breaking change）。
+
+### 评论图片显示
+
+Viewer 的评论图片显示流程：
+
+1. **Indexer** (`build_comments` / `build_comments_incremental`):
+   - 读取 `comment_media_index.jsonl`，按 `(comment_id, url)` 去重（保留 size 最大的条目）
+   - 写入 SQLite `comment_media` 表（per-guild 隔离）
+2. **API** (`GET /api/feed/<id>/comments`):
+   - 批量查询 `comment_media` 表（单次 `IN(...)` 查询）
+   - 每条评论附带 `media: [{file, url, type, width, height}]` 数组
+3. **Frontend** (`CommentList.tsx`):
+   - 评论文本下方渲染图片网格（`mediaUrl(guildId, file)` 构建本地 URL）
+   - `max-h-32` 限制高度，`lazy` 加载
 
 ## Web Scraper 架构（prometheus-neo）
 
@@ -267,6 +284,26 @@ web_scraper (Python)
     HTTP API: 127.0.0.1:9420 (与 QQ legacy 互斥)
 ```
 
+### 多频道抓取流程
+
+**Scraper 多频道流程：**
+- 单进程、单守护进程，每轮循环顺序遍历所有配置的频道
+- 每个频道拥有独立的 `GuildContext`（client、store、scrapers、per-guild recheck cursor）
+- 全局 rate Semaphore 限制所有频道的聚合 API 并发（防止超额请求）
+- 容错构造：某个频道失败（网络/地理封锁）会跳过，其他频道继续执行
+- 数据布局：`data/<guild_id>/` 每个频道独立目录，进程锁保持在父级 `data/prometheus.lock`
+- 统计信息：`/stats` API 返回 per-guild breakdown + 顶层总数
+
+**Viewer 频道发现：**
+- `discover_guilds(data_dir)` 扫描 `data/*/feeds.jsonl` — 所有存在 feeds 的数字目录（即使配置中已删除仍可浏览）
+- 名称增强：索引时从 `conf/guilds.conf.json` 读取频道名称写入 SQLite `guilds` 表（运行时不再读配置）
+- 每频道增量 offset 追踪（B2）
+- 媒体 URL：`/media/<guild_id>/<filename>`（双段路由）
+
+**自动迁移（B1）：**
+- 启动时检测旧版扁平 `data/` → 自动迁移到 `data/<guild_id>/feeds.jsonl`（针对首个/legacy 频道）
+- 幂等操作：已迁移则无操作
+
 ### API 端点
 
 | 端点 | 方法 | 说明 |
@@ -293,6 +330,21 @@ web_scraper (Python)
 - **永久放弃列表**: 3 次重试失败的 URL 写入 `dead_media_permanent.jsonl`, 永不再试
 - **捡漏**: daemon 从 API 获取 live feed (含 legacy 未捕获的视频 URL), 发现文件不在磁盘就下
 
+### 评论图片下载
+
+CommentsScraper 在抓取评论后，如果设置了 `media_downloader`，会对每条评论调用 `MediaDownloader.download_comment_media(comment, feed_id)`：
+
+1. 提取 `richContents.images[].picUrl`（直接图片）
+2. 提取 `richContents.sticker.custom_face.origin_image_url`（贴图/表情图）
+3. 递归处理 `vecReply[]`（嵌套回复）
+4. 每个图片下载到共享 `media/` 目录（SHA256 文件名 + `_seen` 跨 feed/comment 去重）
+5. 映射记录写入 `comment_media_index.jsonl`（每次都写，不去重）
+
+**回填脚本**：`python scripts/backfill_comment_media.py [--data-dir <path>] [--guild-id <id>]`
+- 扫描已有的 `comments.jsonl`，下载缺失的评论图片
+- 幂等：重复运行不会重新下载已有的文件（`_seen` 去重）
+- 默认处理所有频道目录（numeric 子目录名 + 包含 comments.jsonl）
+
 ### 评论增长检测
 
 1. **最新页**: `get_feeds(7,"")` 返回 live `commentCount` → 对比 `comments_fetched_ids.json` 记录的上次数 → 涨了就重抓
@@ -310,3 +362,61 @@ web_scraper (Python)
 | 状态文件 | state.json | 相同 |
 | HTTP API | 9420 | 9420（互斥） |
 | 稳定性 | 依赖 QQ 版本 | web API 可能随时停用 |
+
+## 混合架构（Hybrid Architecture）
+
+### 设计动机
+
+QQ pd.qq.com 的公开 API (`GetGuildFeeds`) 只返回最近约 3.5 个月的数据（~1490 帖上限）。更早的帖子只能通过 QQ Electron 客户端滚动加载捕获。
+
+Prometheus 采用双引擎架构：
+
+```
+inject.js（稀有运行）               web_scraper（持续运行）
+─────────────────                  ─────────────────────
+环境: QQ Electron 内注入             环境: Python 独立进程
+数据: 全量历史（可翻到 2022 年）     数据: 最近 ~3.5 月 API 窗口
+模式: ID_ONLY 快速模式              模式: daemon 守护
+输出: data/<guild_id>/feeds.jsonl  输出: 同一目录（共享）
+媒体: 跳过（由 scraper 补）          媒体: 全功能下载
+评论: 被动捕获（QQ 预加载的）        评论: 主动 API 抓取
+```
+
+### 数据流
+
+```
+┌──────────────┐     feeds.jsonl      ┌──────────────────┐
+│  inject.js   │ ───────────────────→ │ scraper_backfill │
+│ (ID_ONLY)    │   (仅 feed JSON)     │     .py          │
+└──────────────┘                      └────────┬─────────┘
+                                               │
+                                  ┌────────────┼────────────┐
+                                  ▼            ▼            ▼
+                            media/      comments.    comment_
+                            (图片/视频)   jsonl       media_index
+                                  │            │            │
+                                  └────────────┴────────────┘
+                                               │
+                                               ▼
+                                      ┌──────────────┐
+                                      │   Viewer     │
+                                      │ (SQLite FTS) │
+                                      └──────────────┘
+```
+
+### 环境变量
+
+| 变量 | 值 | 效果 |
+|------|-----|------|
+| `PROMETHEUS_ID_ONLY` | `true` / `1` | inject.js 跳过媒体提取、评论遍历、daemon 循环 |
+| `PROMETHEUS_GUILDS_JSON` | JSON 数组字符串 | inject.js 遍历所有频道，写 `data/<guild_id>/` 分目录 |
+
+`start_qq.sh` 自动从 `conf/guilds.conf.json` 解析并导出这两个变量。
+
+### 关键脚本
+
+| 脚本 | 用途 |
+|------|------|
+| `scripts/start_qq.sh` | 启动 patched QQ，自动设置多频道环境变量 |
+| `scripts/scraper_backfill.py` | 读 inject.js 产出，补媒体+评论+评论图片 |
+| `python -m src.web_scraper` | 日常 daemon，增量抓取新帖 |

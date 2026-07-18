@@ -2,7 +2,7 @@
 
 通过 AppImage 解包 + 代码注入，Hook `JSON.parse` 捕获完整 feed 数据（80+ 字段/条），下载媒体文件，捕获滚动时 QQ 预加载的评论。
 
-**已实现**: 帖子 + 评论 + 图片/视频全部覆盖，跨轮幂等去重，守护模式自动刷新，GUI 控制台（launcher + TUI），Web 归档浏览器（Viewer）。
+**已实现**: 帖子 + 评论 + 图片/视频全部覆盖，**评论图片**也归档下载，跨轮幂等去重，守护模式自动刷新，GUI 控制台（launcher + TUI），Web 归档浏览器（Viewer）。
 
 ## 先决条件
 
@@ -100,6 +100,41 @@ bash scripts/start_launcher.sh
 Viewer 无需修改即可浏览 web_scraper 抓取的数据。
 
 **注意**：若已有旧版扁平 `data/` 目录，scraper 启动时会自动迁移到每频道布局（幂等操作）。
+
+## 深度回填（inject.js + scraper 混合架构）
+
+QQ API 只暴露最近 ~3.5 个月的数据。要归档更早的帖子，需要 inject.js 在 QQ Electron 内滚动捕获。
+
+### 工作流程
+
+```bash
+# 1. 一次性深度回填（inject.js ID_ONLY 快速模式）
+#    start_qq.sh 自动设置 PROMETHEUS_ID_ONLY=true + PROMETHEUS_GUILDS_JSON
+bash scripts/start_qq.sh
+# → QQ 启动 → 自动遍历 guilds.conf.json 所有频道 → 快速滚动（不下载媒体）→ 跑完即停
+
+# 2. 补媒体和评论（scraper）
+python scripts/scraper_backfill.py
+# → 并发下载图片/视频 → 抓评论 → 下载评论图片 → 幂等（可重复运行）
+
+# 3. Viewer 重建索引
+curl -X POST http://127.0.0.1:9422/api/rebuild
+
+# 4. 日常增量（scraper daemon）
+python -m src.web_scraper
+```
+
+### 为什么需要混合架构
+
+| 角色 | inject.js | web_scraper |
+|------|-----------|-------------|
+| 运行环境 | QQ Electron 内 | Python 独立进程 |
+| 数据范围 | 全量历史（可翻到 2022 年）| 最近 ~3.5 月 API 窗口 |
+| 速度 | ID_ONLY 模式快 6-10× | 纯 HTTP，最快 |
+| 媒体下载 | ID_ONLY 跳过（由 scraper 补）| 全功能 |
+| 频率 | 偶尔跑一次（深度回填）| 持续 daemon |
+
+两者共享 `data/<guild_id>/` 目录，数据格式完全兼容。
 
 ## 停止
 

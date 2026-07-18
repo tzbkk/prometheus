@@ -145,3 +145,10 @@
 - **不支持热重载**：添加/删除频道需编辑配置文件并重启 scraper
 - **自动迁移**：若检测到旧版扁平 `data/` 目录，会自动迁移到 `data/<guild_id>/`（幂等操作）
 - **手动迁移**：也可运行 `python scripts/migrate_multi_guild.py [--data-dir <path>] [--guild-id <id>]` 手动迁移
+
+### Hybrid Architecture 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PROMETHEUS_ID_ONLY` | (未设置) | `true` 或 `1` 时，inject.js 进入快速模式：跳过媒体提取、评论遍历、daemon 循环。只写 feed JSON。 |
+| `PROMETHEUS_GUILDS_JSON` | (未设置) | JSON 数组字符串（如 `[{"guild_id":"123","guild_number":"name","name":"频道名"}]`）。设置后 inject.js 自动遍历所有频道。由 `start_qq.sh` 从 `conf/guilds.conf.json` 自动导出。 |

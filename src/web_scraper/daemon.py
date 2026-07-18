@@ -115,9 +115,7 @@ class Daemon:
         # (below) sometimes omits feeds that GetGuildFeeds includes, so we
         # run both to maximise coverage.
         feeds_attch = ""
-        feeds_pages = 0
-        _MAX_FEEDS_PAGES = 100
-        while feeds_pages < _MAX_FEEDS_PAGES:
+        while True:
             try:
                 vec_feed, feeds_attch, is_finish = (
                     ctx.feeds_scraper.client.get_feeds(0, feeds_attch)
@@ -141,7 +139,6 @@ class Daemon:
                     self._log.exception(
                         "media download failed for feed=%s", feed.get("id")
                     )
-            feeds_pages += 1
             if page_new == 0 or is_finish or not feeds_attch:
                 break
 
@@ -161,7 +158,7 @@ class Daemon:
                 continue
             ch_attch = ""
             ch_pages = 0
-            _MAX_CH_PAGES = 50
+            _MAX_CH_PAGES = 500
             while ch_pages < _MAX_CH_PAGES:
                 try:
                     vec_feed, ch_attch, finish = (

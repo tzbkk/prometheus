@@ -1,0 +1,16 @@
+SchemaVersion: 1
+Type: structure
+Name: LogTail
+Description: >-
+  launcher GET /targets/{target}/logs 响应（日志尾读）。tail=N 查询
+  参数不入指令边（query 归 harness/行为层）。{target} 参数之家。
+Location: urn:prometheus:type:LogTail
+Parameters:
+  target: {Type: TargetName}
+Definition:
+  Form: record
+  Table:
+    - Field: lines
+      Type: array<string>
+      Required: true
+      Description: 日志尾行（无换行符的裸行数组；空数组 = 无日志）。

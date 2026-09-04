@@ -1,0 +1,17 @@
+# Runtime trees — anchored to repo root so contracts/fixtures/ subpaths
+# (fixtures/data/, fixtures/archives/) stay tracked for R11.
+/data/
+/log/
+/output/
+/archives/
+# deepbackfill live credentials (p_skey) — template stays tracked
+/conf/deepbackfill.conf.json
+__pycache__/
+*.pyc
+*.egg-info/
+.coverage
+*.log
+/db/
+.sisyphus/
+guild1.db
+.venv/

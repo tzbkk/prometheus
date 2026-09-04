@@ -1,0 +1,39 @@
+SchemaVersion: 1
+Type: structure
+Name: FeedDetail
+Description: >-
+  viewer GET /api/feed/{feed_id} 响应。{feed_id} 参数之家。media 条目携带
+  后端出的全路径（前端零拼接、后端单权威——路径语义随实体树）。
+  完整原体字段不入钉扎面（详情页由前端消费
+  additionalProperties 宽容面）。
+Location: urn:prometheus:type:FeedDetail
+Parameters:
+  feed_id: {Type: FeedId}
+Definition:
+  Form: record
+  Table:
+    - Field: id
+      Type: FeedId
+      Required: true
+      Description: 帖子 ID（与路径参数一致）。
+    - Field: guild_id
+      Type: GuildId
+      Required: true
+      Description: 所属频道。
+    - Field: create_time
+      Type: string
+      Required: true
+      Description: 创建时间（十进制字符串秒）。
+    - Field: media
+      Type: array<object>
+      Required: true
+      Description: 媒体条目数组（空 = 无媒体）。
+      Fields:
+        - Field: path
+          Type: string
+          Required: true
+          Description: 后端出的完整媒体路径（/media/<guild>/<shard>/<sha256>.<ext> 形态）。
+        - Field: type
+          Type: string
+          Required: true
+          Description: 媒体类型（腾讯值域不钉——）。

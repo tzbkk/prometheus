@@ -1,0 +1,13 @@
+SchemaVersion: 1
+Type: structure
+Name: DeepbackfillLogs
+Description: >-
+  GET /logs 响应（deepbackfill）。日志尾行数组（tail 查询参数不入边）。
+Location: urn:prometheus:type:DeepbackfillLogs
+Definition:
+  Form: record
+  Table:
+    - Field: lines
+      Type: array<string>
+      Required: true
+      Description: 日志尾行（裸行数组）。

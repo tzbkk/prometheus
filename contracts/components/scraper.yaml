@@ -1,0 +1,35 @@
+SchemaVersion: 1
+Type: component
+Name: scraper
+Description: >-
+  采集服务（daemon→service :9420 入约）。纯 HTTP 抓取 pd.qq.com
+  公开 API（noauth commreader 端点族——与 deepbackfill 的 auth
+  guild_feed_reader 之分，；两者除凭据面外完全同构），
+  写实体树 + 下载媒体。增长检测：API commentCount vs 启动扫描
+  计数 → 重拉集；死 URL 集启动派生、新条目直接标 dead；媒体经 writer
+  晋升规则（pending→ok/failed，retries≥3→dead）。daemon 模式默认
+  （间隔 conf: scraper_daemon_interval_sec），--once 单次。运行期经由
+  entity_store 写入（⑤：实现载体，非组件图节点）。API 面五端点与
+  deepbackfill 同族（㉔）：health/stats/config/logs/trigger——指令边
+  即契约，query 参数（tail 等）归行为层。
+ComponentType: service
+Binds: 127.0.0.1:9420
+Runs: python -m src.web_scraper
+Upstream:
+  Feed: [external:qq-api]
+  Comment: [external:qq-api]
+  Reply: [external:qq-api]
+  MediaAsset: [external:qq-cdn]
+  ProcessLock: []
+  ScraperConfig: "PUT /config"
+Downstream:
+  Feed: []
+  Comment: []
+  Reply: []
+  MediaAsset: []
+  ProcessLock: []
+  ScraperHealth: "GET /health"
+  ScraperStats: "GET /stats"
+  ScraperConfig: ["GET /config", "PUT /config"]
+  ScraperLogs: "GET /logs"
+  ScraperAction: "POST /action/trigger-daemon"

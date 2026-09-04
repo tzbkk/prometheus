@@ -1,0 +1,19 @@
+SchemaVersion: 1
+Type: structure
+Name: GuildList
+Description: >-
+  频道列表响应（唯一下游 = viewer GET /api/guilds，索引库频道清单）。
+  薄钉 guild_id 一键。
+Location: urn:prometheus:type:GuildList
+Definition:
+  Form: record
+  Table:
+    - Field: guilds
+      Type: array<object>
+      Required: true
+      Description: 频道对象数组（空数组 = 无频道）。
+      Fields:
+        - Field: guild_id
+          Type: GuildId
+          Required: true
+          Description: 频道 ID（数据目录扫描来源；附加字段如 feed 计数不入钉扎面，additionalProperties 宽容）。

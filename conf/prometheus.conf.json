@@ -1,0 +1,10 @@
+{
+  "_comment": "Prometheus configuration. Edit values here; all scripts/modules read from this file. null means 'auto-detect at runtime'.",
+  "channel_id": "7743321643036658",
+  "channel_name": "擅长捉弄的高木同学",
+  "guild_number": "Takagi3channel",
+  "scraper_max_workers": 10,
+  "scraper_daemon_interval_sec": 120,
+  "scraper_api_port": 9420,
+  "data_dir": null
+}

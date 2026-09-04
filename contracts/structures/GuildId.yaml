@@ -1,0 +1,13 @@
+SchemaVersion: 1
+Type: structure
+Name: GuildId
+Description: >-
+  QQ 频道（guild）的数字 ID，纯十进制数字符串。目录树 data/<guild>/ 与归档包路径
+  archives/<guild>/packages/ 以此为第一段。实测样例：7743321643036658。
+  注意：pd.qq.com URL 中的字母数字 slug（如 Takagi3channel，配置键 guild_number）
+  是另一个概念，不属于本类型，不进入任何 Location。
+Location: urn:prometheus:type:GuildId
+Definition:
+  Form: scalar
+  Base: string
+  Pattern: '^[0-9]+$'

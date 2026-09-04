@@ -1,0 +1,33 @@
+SchemaVersion: 1
+Type: structure
+Name: TargetStatus
+Description: >-
+  单目标状态（与 TargetList 条目同构）。{target} 参数之家。
+  同一结构服务四条指令（GET 详情 + start/stop/restart 幂等响应——重复
+  start 已运行 → 200 返回当前态），指令串列表形态（zhizong 0.4.1）。
+Location: urn:prometheus:type:TargetStatus
+Parameters:
+  target: {Type: TargetName}
+Definition:
+  Form: record
+  Table:
+    - Field: name
+      Type: TargetName
+      Required: true
+      Description: 监督目标名（三枚举，TargetName 标量）。
+    - Field: state
+      Type: stopped|running|failed
+      Required: true
+      Description: 三态窄起步（真实可观测；starting/stopping 未来按 Evolution 追加）。
+    - Field: pid
+      Type: integer?
+      Required: true
+      Description: 进程 PID（unix）；stopped 态为 null。
+    - Field: uptime_sec
+      Type: integer?
+      Required: true
+      Description: 连续运行秒数；stopped 态为 null。
+    - Field: restarts
+      Type: integer
+      Required: true
+      Description: 累计重启次数（含崩溃自愈）。

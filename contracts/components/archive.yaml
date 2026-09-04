@@ -1,0 +1,23 @@
+SchemaVersion: 1
+Type: component
+Name: archive
+Description: >-
+  归档打包 CLI（打包是批处理操作，
+  不是常驻服务）。打包能力：引擎
+  src/archive/engine.py + 本 CLI 入口（手动/cron）+ Manifest 格式契约。
+  窗口语义：纯日期窗 (from, to]，快照
+  语义——三类实体各自按自身 createTime 判窗。
+  越界/倒序/未来窗 → exit 2；打包前对账失败（计数 vs 树扫描不一致）→
+  exit 3；其他 → 1；成功/空窗 → 0。包自包含：镜像实体树
+  切片 + manifest.json + 媒体，同内容媒体跨包重复出现（内容寻址 +
+  自包含，/⑲-c）。对 data/ 严格只读。
+ComponentType: cli
+Runs: python scripts/archive.py
+Upstream:
+  Feed: []
+  Comment: []
+  Reply: []
+  MediaAsset: []
+Downstream:
+  ArchivePackage: []
+  Manifest: []

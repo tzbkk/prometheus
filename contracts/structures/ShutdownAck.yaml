@@ -1,0 +1,14 @@
+SchemaVersion: 1
+Type: structure
+Name: ShutdownAck
+Description: >-
+  launcher POST /shutdown 响应。无请求体（Upstream 无边）；响应体存在是为
+  指令边可挂结构、可采样执法（POST /shutdown 语义：优雅关停全部目标——README 停止方式 2/3 的 API 形态）。
+Location: urn:prometheus:type:ShutdownAck
+Definition:
+  Form: record
+  Table:
+    - Field: accepted
+      Type: boolean
+      Required: true
+      Description: 关停已受理（各目标依序优雅退出）。

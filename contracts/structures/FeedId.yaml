@@ -1,0 +1,12 @@
+SchemaVersion: 1
+Type: structure
+Name: FeedId
+Description: >-
+  帖子（feed）ID：B_ 前缀 + 腾讯字母数字后缀。实测 19,420 个全部为 B_ + 38 位
+  [0-9A-Za-z]，零字符集违规；后缀长度不钉（实测恒 38，腾讯若变长则放行；
+  非字母数字的畸形孤儿由写者分片函数 fail loud 拦截，不属本契约职责）。
+Location: urn:prometheus:type:FeedId
+Definition:
+  Form: scalar
+  Base: string
+  Pattern: '^B_[0-9A-Za-z]+$'

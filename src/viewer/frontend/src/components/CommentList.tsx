@@ -1,0 +1,136 @@
+import { useState } from 'react'
+import { type Comment } from '@/lib/api'
+import { Lightbox } from '@/components/Lightbox'
+
+interface CommentListProps {
+  comments: Comment[]
+}
+
+function formatTime(unixSeconds: number | null): string {
+  if (!unixSeconds) return ''
+  return new Date(unixSeconds * 1000).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function CommentItem({
+  comment,
+  onImageClick,
+}: {
+  comment: Comment
+  onImageClick: (src: string) => void
+}) {
+  const [avatarError, setAvatarError] = useState(false)
+  const firstLetter = comment.author_nick?.charAt(0) ?? '?'
+  const time = formatTime(comment.create_time)
+  const showLike = comment.like_count > 0
+  const showReply = comment.reply_count > 0
+
+  return (
+    <div className="rounded-lg bg-gray-50 p-4">
+      <div className="flex items-start gap-3">
+        {avatarError || !comment.author_avatar ? (
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-sm font-medium text-gray-600">
+            {firstLetter}
+          </div>
+        ) : (
+          <img
+            src={comment.author_avatar}
+            alt={comment.author_nick ?? 'avatar'}
+            className="h-8 w-8 shrink-0 rounded-full object-cover"
+            onError={() => setAvatarError(true)}
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium text-gray-900">
+              {comment.author_nick ?? 'Unknown'}
+            </span>
+            {time && <span className="text-xs text-gray-400">{time}</span>}
+          </div>
+          {comment.content_text && (
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-700">
+              {comment.content_text}
+            </p>
+          )}
+          {comment.media && comment.media.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {comment.media.map((m, i) => {
+                const src = m.path ?? m.url
+                if (!src) return null
+                return (
+                  <img
+                    key={`${src}-${i}`}
+                    src={src}
+                    alt=""
+                    loading="lazy"
+                    onClick={() => onImageClick(src)}
+                    className="max-h-32 cursor-zoom-in rounded object-cover"
+                  />
+                )
+              })}
+            </div>
+          )}
+          {(showLike || showReply) && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400">
+              {showLike && <span>♡ {comment.like_count}</span>}
+              {showReply && <span>↳ {comment.reply_count}</span>}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function CommentList({ comments }: CommentListProps) {
+  const [lightbox, setLightbox] = useState<string | null>(null)
+
+  if (comments.length === 0) {
+    return (
+      <p className="py-6 text-center text-sm text-gray-400">暂无评论</p>
+    )
+  }
+
+  return (
+    <>
+      <div className="space-y-3">
+        {comments.map((comment) => (
+          <CommentItem
+            key={comment.id}
+            comment={comment}
+            onImageClick={setLightbox}
+          />
+        ))}
+      </div>
+
+      <Lightbox src={lightbox} onClose={() => setLightbox(null)} />
+    </>
+  )
+}
+
+export function CommentListSkeleton() {
+  return (
+    <div className="space-y-3">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="animate-pulse rounded-lg bg-gray-50 p-4"
+        >
+          <div className="flex items-start gap-3">
+            <div className="h-8 w-8 shrink-0 rounded-full bg-gray-200" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-24 rounded bg-gray-200" />
+              <div className="h-3 w-full rounded bg-gray-200" />
+              <div className="h-3 w-2/3 rounded bg-gray-200" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}

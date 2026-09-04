@@ -1,0 +1,17 @@
+{
+  "feeds": [
+    {
+      "id": "B_5f2e8a3b9c1d4e6f7a8b9c0d1e2f3a4b5c6d7e",
+      "guild_id": "7743321643036658",
+      "create_time": "1782919557",
+      "title_text": "合成样本贴",
+      "author_nick": "合成作者",
+      "author_id": "10001",
+      "author_avatar": null,
+      "like_count": 7,
+      "comment_count": 42,
+      "image_count": 1,
+      "video_count": 0
+    }
+  ]
+}

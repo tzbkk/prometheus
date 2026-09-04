@@ -1,0 +1,43 @@
+SchemaVersion: 1
+Type: component
+Name: deepbackfill
+Description: >-
+  全量采集服务（与 scraper 完全
+  同化——数据面五键全同、API 面同族，合法差异仅凭据面与 feed 清单获取器）。
+  一次运行 = auth 全史 feeds 翻页（isFinish 干净终止——2026-08-25/08-29 两轮
+  实测全量翻到 2022-02-01，~604 页）+ 逐帖实体树写入 + 池化媒体下载 +
+  增长检测触发的 noauth 逐帖评论/回复（自含全管线，不依赖事后
+  慢补）+ 持锁（ProcessLock）。凭据面 = ptlogin2 纯网页扫码登录（纯网
+  路线，零部署）：服务探测凭证缺/失效自动起
+  QR 会话，二维码经 /auth/qr.png 原图直出 + /auth/page 内嵌页在浏览器展示
+  。
+  扫码成功 → conf 四键 0600 落盘 → 活测 →
+  state=ok。与 scraper 同指 external:qq-api 但凭据面不同：auth
+  guild_feed_reader vs noauth commreader。本组件为 2022 以降
+  全史唯一回源。
+  trigger 起 background 回填线程（前置凭证活测，未就绪 409 not_configured
+  指向 QR 页）；运行中再触发 409 busy（全史回填不可重入）。auth 到 ok
+  （扫码成功或开机探测直通）→ 服务自动点火回填（on_ready 回调；
+  trigger API 为手工面）。
+ComponentType: service
+Binds: 127.0.0.1:9424
+Runs: python -m src.deepbackfill
+Upstream:
+  Feed: [external:qq-api]
+  Comment: [external:qq-api]
+  Reply: [external:qq-api]
+  MediaAsset: [external:qq-cdn]
+  ProcessLock: []
+  DeepbackfillCredential: [external:qq-ptlogin]
+  DeepbackfillConfig: "PUT /config"
+Downstream:
+  Feed: []
+  Comment: []
+  Reply: []
+  MediaAsset: []
+  ProcessLock: []
+  DeepbackfillHealth: "GET /health"
+  DeepbackfillStats: "GET /stats"
+  DeepbackfillConfig: ["GET /config", "PUT /config"]
+  DeepbackfillLogs: "GET /logs"
+  DeepbackfillAction: "POST /action/trigger-daemon"

@@ -1,0 +1,31 @@
+SchemaVersion: 1
+Type: component
+Name: launcher
+Description: >-
+  进程监督服务（ 入图；守护/客户端分离）：
+  纯监督者——不承担打包、不碰数据面（零文件结构边，
+  Upstream/Downstream 全为指令边）。监督三目标：
+  scraper / deepbackfill / viewer；archive 不在监督面（打包是批处理，
+  走 scripts/archive.py CLI，非监督对象）。（docker 模型）：--daemon 是监督
+  树唯一持久属主（setsid 自活）；默认入口 = 瘦客户端 shell（探活
+  :9421，死则拉起守护再连），quit 只关 shell（目标照跑），shutdown
+  动词全树关停；多 shell 并发看同一棵树。REST 路径参数化
+  （/targets/{target}，{target}之家 = TargetName 标量）；
+  富对象数组；三态窄起步（stopped|running|failed）；
+  幂等 + 裸状态码（重复 start 已运行 → 200 当前态；错误 =
+  状态码 + ErrorEnvelope）；logs 入
+  API（tail 查询参数不入边）；config/shutdown 入 API
+  （launcher 单写者、原子写；PUT /config 回显完整对象 =
+  双向载荷首用，）。消费端 = launcher 自带 shell
+  （监督面唯一入口）。
+ComponentType: service
+Binds: 127.0.0.1:9421
+Runs: python -m src.launcher [--daemon]
+Upstream:
+  LauncherConfig: "PUT /config"
+Downstream:
+  TargetList: "GET /targets"
+  TargetStatus: ["GET /targets/{target}", "POST /targets/{target}/start", "POST /targets/{target}/stop", "POST /targets/{target}/restart"]
+  LogTail: "GET /targets/{target}/logs"
+  LauncherConfig: ["GET /config", "PUT /config"]
+  ShutdownAck: "POST /shutdown"

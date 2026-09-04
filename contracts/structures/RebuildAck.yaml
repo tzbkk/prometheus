@@ -1,0 +1,14 @@
+SchemaVersion: 1
+Type: structure
+Name: RebuildAck
+Description: >-
+  viewer POST /api/rebuild 响应。全量重建索引（目录扫描重跑）；无请求体，
+  响应确认受理。
+Location: urn:prometheus:type:RebuildAck
+Definition:
+  Form: record
+  Table:
+    - Field: accepted
+      Type: boolean
+      Required: true
+      Description: 重建已受理（异步执行，进度经 stats 轮询）。

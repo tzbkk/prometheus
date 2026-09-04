@@ -1,0 +1,14 @@
+SchemaVersion: 1
+Type: structure
+Name: ScraperAction
+Description: >-
+  POST /action/trigger-daemon 响应（scraper）。无请求体；响应确认触发受理
+  （幂等：守护已在跑亦返回 true）。
+Location: urn:prometheus:type:ScraperAction
+Definition:
+  Form: record
+  Table:
+    - Field: triggered
+      Type: boolean
+      Required: true
+      Description: 扫描/采集循环已触发受理。

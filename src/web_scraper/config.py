@@ -1,0 +1,207 @@
+"""Configuration and constants for the web scraper module.
+
+Reads conf/prometheus.conf.json, adding web-scraper-specific keys.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_log = logging.getLogger(__name__)
+
+# API endpoints (base URL for pd.qq.com public web APIs)
+API_BASE_URL = "https://pd.qq.com/qunng/guild/gotrpc/noauth/trpc.qchannel.commreader.ComReader/"
+GUILD_PAGE_URL = "https://pd.qq.com/g/{guild_id}"
+
+# API paths
+API_GET_FEEDS = "GetGuildFeeds"
+API_GET_FEED_DETAIL = "GetFeedDetail"
+API_GET_COMMENTS = "GetFeedComments"
+
+# Service types per API (empirically verified)
+SERVICE_TYPE_FEEDS = 12
+SERVICE_TYPE_DETAIL = 5
+SERVICE_TYPE_COMMENTS = 5
+
+# Headers
+CLIENT_APPID = "537246381"
+
+# Defaults
+DEFAULT_MAX_WORKERS = 10
+DEFAULT_DAEMON_INTERVAL_SEC = 120
+DEFAULT_API_PORT = 9420
+
+
+@dataclass
+class Guild:
+    """A single QQ guild (community) scrape target.
+
+      - guild_id    : numeric QQ community ID, e.g. "7743321643036658"
+                      (stored in the `channel_id` field).
+      - guild_number: community slug, e.g. "Takagi3channel".
+      - name        : human-readable display name, e.g. "擅长捉弄的高木同学".
+    """
+
+    guild_id: str
+    guild_number: str
+    name: str
+
+
+class Config:
+    """Parsed configuration for the web scraper."""
+
+    def __init__(self, raw: dict, config_dir: Path | None = None):
+        self.channel_id = raw.get("channel_id", "")
+        self.channel_name = raw.get("channel_name", "")
+        self.guild_number = raw.get("guild_number", "")
+        self.scraper_max_workers = raw.get("scraper_max_workers", DEFAULT_MAX_WORKERS)
+        self.scraper_daemon_interval_sec = raw.get(
+            "scraper_daemon_interval_sec", DEFAULT_DAEMON_INTERVAL_SEC
+        )
+        self.scraper_api_port = raw.get("scraper_api_port", DEFAULT_API_PORT)
+        # data_dir: use config value, expand ~, or default to <project>/data
+        dd = raw.get("data_dir")
+        if dd:
+            self.data_dir = Path(dd).expanduser()
+            if not self.data_dir.is_absolute():
+                self.data_dir = _PROJECT_ROOT / self.data_dir
+        else:
+            self.data_dir = _PROJECT_ROOT / "data"
+
+        # Resolve the multi-guild list. `config_dir` is the
+        # directory of the loaded prometheus.conf.json so we can locate a
+        # sibling guilds.conf.json.
+        self.guilds: list[Guild] = self._resolve_guilds(raw, config_dir)
+
+        # Mirror the FIRST resolved
+        # guild into the single-guild fields (channel_id / guild_number /
+        # channel_name). If no guilds resolved, keep the raw
+        # (possibly empty) values.
+        if self.guilds:
+            g0 = self.guilds[0]
+            self.channel_id = g0.guild_id
+            self.guild_number = g0.guild_number
+            self.channel_name = g0.name
+
+    # ------------------------------------------------------------------
+    # Multi-guild resolution
+    # ------------------------------------------------------------------
+    def _resolve_guilds(
+        self, raw: dict, config_dir: Path | None
+    ) -> list[Guild]:
+        """Build the validated list of guilds to scrape.
+
+        Resolution order:
+          1. guilds.conf.json (sibling of prometheus.conf.json, or fallback
+             <project>/conf/guilds.conf.json) if it has a non-empty `guilds`
+             array — this is the source of truth.
+          2. Else fallback: synthesize ONE guild from the
+              channel_id / guild_number / channel_name fields so deployments
+              without guilds.conf.json keep working.
+
+        After collecting raw entries:
+          - Drop entries missing guild_id OR guild_number (warn).
+          - Drop entries whose guild_id is empty or non-numeric (warn).
+          - Dedup by guild_id, keeping the first occurrence (warn on dups).
+        """
+        raw_entries: list[dict] = []
+
+        guilds_file = self._find_guilds_conf(config_dir)
+        if guilds_file is not None:
+            try:
+                graw = json.loads(guilds_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                _log.warning("Failed to read %s: %s", guilds_file, exc)
+                graw = {}
+            # Strip _comment keys (same pattern as Config.load).
+            graw = {k: v for k, v in graw.items() if not k.startswith("_")}
+            entries = graw.get("guilds")
+            if isinstance(entries, list) and entries:
+                raw_entries = entries
+
+        if not raw_entries:
+            # Fallback — build a single guild from the single-guild fields.
+            raw_entries = [
+                {
+                    "guild_id": raw.get("channel_id", ""),
+                    "guild_number": raw.get("guild_number", ""),
+                    "name": raw.get("channel_name", ""),
+                }
+            ]
+
+        guilds: list[Guild] = []
+        seen_ids: set[str] = set()
+        for entry in raw_entries:
+            if not isinstance(entry, dict):
+                _log.warning("Skipping non-object guild entry: %r", entry)
+                continue
+            guild_id = str(entry.get("guild_id", "") or "").strip()
+            guild_number = str(entry.get("guild_number", "") or "").strip()
+            name = str(entry.get("name", "") or "")
+
+            if not guild_id:
+                _log.warning(
+                    "Skipping guild entry with empty guild_id: %r", entry
+                )
+                continue
+            if not guild_number:
+                _log.warning(
+                    "Skipping guild entry with empty guild_number: %r", entry
+                )
+                continue
+            if not guild_id.isnumeric():
+                _log.warning(
+                    "Skipping guild entry with non-numeric guild_id %r: %r",
+                    guild_id,
+                    entry,
+                )
+                continue
+            if guild_id in seen_ids:
+                _log.warning(
+                    "Skipping duplicate guild_id %s (already seen)", guild_id
+                )
+                continue
+
+            seen_ids.add(guild_id)
+            guilds.append(
+                Guild(guild_id=guild_id, guild_number=guild_number, name=name)
+            )
+
+        return guilds
+
+    @staticmethod
+    def _find_guilds_conf(config_dir: Path | None) -> Path | None:
+        """Locate guilds.conf.json.
+
+        Prefer a sibling of the loaded prometheus.conf.json (honoring
+        PROMETHEUS_CONFIG); fall back to <project>/conf/guilds.conf.json.
+        Return None if neither file exists.
+        """
+        candidates: list[Path] = []
+        if config_dir is not None:
+            candidates.append(config_dir / "guilds.conf.json")
+        candidates.append(_PROJECT_ROOT / "conf" / "guilds.conf.json")
+        for p in candidates:
+            if p.is_file():
+                return p
+        return None
+
+    @classmethod
+    def load(cls) -> "Config":
+        """Load config from PROMETHEUS_CONFIG env or default path."""
+        config_path = os.environ.get("PROMETHEUS_CONFIG")
+        if config_path:
+            p = Path(config_path)
+        else:
+            # Try conf/prometheus.conf.json, then project root
+            p = _PROJECT_ROOT / "conf" / "prometheus.conf.json"
+            if not p.exists():
+                p = _PROJECT_ROOT / "prometheus.conf.json"
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        # Strip _comment keys
+        raw = {k: v for k, v in raw.items() if not k.startswith("_")}
+        return cls(raw, config_dir=p.parent)

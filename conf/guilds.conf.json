@@ -1,0 +1,6 @@
+{
+  "_comment": "Multi-guild scrape targets. Scraper writes to data/<guild_id>/.",
+  "guilds": [
+    { "guild_id": "7743321643036658", "guild_number": "Takagi3channel", "name": "擅长捉弄的高木同学" }
+  ]
+}

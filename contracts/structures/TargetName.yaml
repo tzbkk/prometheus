@@ -1,0 +1,12 @@
+SchemaVersion: 1
+Type: structure
+Name: TargetName
+Description: >-
+  launcher 监督目标名（三目标）。launcher API 路径参数 {target} 的参数之家（TargetStatus/LogTail 的
+  Parameters.Type）。值域 = 三枚举，组件图外的名字
+  天然被拒。
+Location: urn:prometheus:type:TargetName
+Definition:
+  Form: scalar
+  Base: string
+  Pattern: '^(scraper|deepbackfill|viewer)$'

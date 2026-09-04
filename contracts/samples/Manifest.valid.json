@@ -1,0 +1,12 @@
+{
+  "window": {"from": "20220101", "to": "20260830"},
+  "counts": {"feeds": 2, "comments": 3, "replies": 1},
+  "media": [
+    {
+      "path": "media/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.jpg",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "created_at": "2026-08-30T12:00:00Z",
+  "zhizong_version": "0.4.1"
+}

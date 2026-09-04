@@ -1,0 +1,22 @@
+SchemaVersion: 1
+Type: structure
+Name: MediaAsset
+Description: >-
+  媒体文件本体（二进制：图片/视频）。Form: grammar：文件名语言即契约，
+  文件内容不钉（字节不可变，迁移与运行期均只改名不改写）。单一内容
+  寻址方案 <内容 sha256 64 位摘要>.<真实扩展名>，分片 = 摘要前 2 位（文件名即
+  哈希，无需二次哈希），同内容跨实体去重坍缩为单文件。写者纪律：扩展名
+  取 magic sniff（不转码、不以旧名为准）；不匹配本语法的文件名 fail loud。
+  D3 降级条款：若 zhizong grammar 样本语义实施期证实不支撑，文件名校验降级
+  prometheus 侧审计脚本，本结构降级占位（现判定：样本语义支撑， productions
+  自锚定后可用）。
+Location: file:data/{guild}/media/{media_shard}/{media_file}
+Parameters:
+  guild: {Type: GuildId}
+  media_shard: {Type: Shard}
+  media_file: {Type: MediaFile}
+Lifecycle: append-only
+Definition:
+  Form: grammar
+  Productions: |
+    media_file ::= /^[0-9a-f]{64}\.(jpg|png|mp4|gif)$/

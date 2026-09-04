@@ -1,0 +1,16 @@
+SchemaVersion: 1
+Type: structure
+Name: PackageName
+Description: >-
+  归档包文件名主干（.tar.zst 后缀在 Location 模板中，不入本标量）。
+  打包窗口编码进文件名，包自描述、免读 manifest 即可定窗口。
+  全量包：<创建时刻>_full；增量包：<创建时刻>_from_<起始日>_to_<终止日>。
+  创建时刻 = 打包作业时刻，UTC，格式 YYYYMMDDTHHMMSSZ；起始/终止日为窗口边界
+  日期，UTC，格式 YYYYMMDD。窗口语义 (from, to]（含 to 斥 from）由 archive 组件
+  行为规格定义；命名只承载边界值本身。两日期不比较先后——越界与倒序窗口是
+  archive 的 fail loud 职责（exit 2），不是命名契约职责。
+Location: urn:prometheus:type:PackageName
+Definition:
+  Form: scalar
+  Base: string
+  Pattern: '^[0-9]{8}T[0-9]{6}Z(_full|_from_[0-9]{8}_to_[0-9]{8})$'

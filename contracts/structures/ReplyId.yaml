@@ -1,0 +1,12 @@
+SchemaVersion: 1
+Type: structure
+Name: ReplyId
+Description: >-
+  回复（reply）ID：r_ 前缀 + 腾讯字母数字后缀。实测与评论同字母表、同 38 位长度；
+  后缀长度不钉，理由同 FeedId。评论与回复分治，路径以字面 r_ 前缀区分，
+  两类各 256 分片桶、互不混合。
+Location: urn:prometheus:type:ReplyId
+Definition:
+  Form: scalar
+  Base: string
+  Pattern: '^r_[0-9A-Za-z]+$'

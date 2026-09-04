@@ -1,0 +1,7 @@
+{
+  "_comment": "deepbackfill credentials template (pure-web route). Copy to conf/deepbackfill.conf.json — or better: just run 'start deepbackfill' in the launcher shell; when credentials are missing/stale the service starts a QR session and the browser opens automatically (scan with mobile QQ; the service writes this file 0600 after live verification). The real file is gitignored and must NEVER be committed.",
+  "uin": "10000",
+  "p_uin": "o10000",
+  "p_skey": "REPLACE_WITH_44_CHAR_PSKEY_MINTED_FOR_pd.qq.com",
+  "minted_at": 0
+}

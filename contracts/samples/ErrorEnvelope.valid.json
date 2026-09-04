@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "window_invalid",
+    "message": "from must precede to"
+  }
+}

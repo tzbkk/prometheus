@@ -1,0 +1,32 @@
+SchemaVersion: 1
+Type: structure
+Name: ScraperStats
+Description: >-
+  GET /stats 响应（scraper）。四类实体累计计数 + gateway_rejects 网关拒绝
+  计数（僵尸绿灯防线：200 body code!=0 的累计次数）——快照语义，重启归零与否不钉。
+Location: urn:prometheus:type:ScraperStats
+Definition:
+  Form: record
+  Table:
+    - Field: feeds
+      Type: integer
+      Required: true
+      Description: feed 实体计数。
+    - Field: comments
+      Type: integer
+      Required: true
+      Description: 评论实体计数。
+    - Field: replies
+      Type: integer
+      Required: true
+      Description: 回复实体计数。
+    - Field: media
+      Type: integer
+      Required: true
+      Description: 媒体文件计数。
+    - Field: gateway_rejects
+      Type: integer
+      Required: false
+      Description: >-
+        最近周期 noauth 网关拒绝（200 body code!=0）计数。0/缺省 = 正常；
+        非零 = 网关被锁告警——"空页≠没有新帖"（僵尸绿灯防线）。

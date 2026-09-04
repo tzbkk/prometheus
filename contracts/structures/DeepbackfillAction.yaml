@@ -1,0 +1,15 @@
+SchemaVersion: 1
+Type: structure
+Name: DeepbackfillAction
+Description: >-
+  POST /action/trigger-daemon 响应（deepbackfill）。无请求体；响应确认回填
+  线程已起。运行中再触发 = 409 busy ErrorEnvelope（全史回填不可重入——
+  与 scraper 幂等受理语义的有意分歧）。
+Location: urn:prometheus:type:DeepbackfillAction
+Definition:
+  Form: record
+  Table:
+    - Field: triggered
+      Type: boolean
+      Required: true
+      Description: 扫描/采集循环已触发受理。

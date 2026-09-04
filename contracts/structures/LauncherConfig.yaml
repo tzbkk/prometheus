@@ -1,0 +1,20 @@
+SchemaVersion: 1
+Type: structure
+Name: LauncherConfig
+Description: >-
+  launcher GET/PUT /config 请求/响应体（PUT 回显完整对象——
+  同结构同指令双向挂载，双向载荷特性首用，写后即读）。launcher 单写者、
+  原子写；配置面唯一读通道 = 本 API（shell config 命令为消费方）。
+Location: urn:prometheus:type:LauncherConfig
+Definition:
+  Form: record
+  Table:
+    - Field: guilds
+      Type: array<object>
+      Required: true
+      Description: 监督的频道清单（多频道配置面）；其余配置键不入钉扎面（additionalProperties 宽容——配置面演化快，薄钉即可）。
+      Fields:
+        - Field: guild_id
+          Type: GuildId
+          Required: true
+          Description: 频道 ID（数据目录扫描来源；附加字段如 feed 计数不入钉扎面，additionalProperties 宽容）。

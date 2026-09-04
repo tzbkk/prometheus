@@ -1,0 +1,78 @@
+SchemaVersion: 1
+Type: structure
+Name: Manifest
+Description: >-
+  归档包内的 manifest.json（包自描述对账面）。薄钉六要素：
+  window.from / window.to / counts（三类实体计数）/ media（媒体清单
+  [{path, sha256}]）/ created_at（生成时刻）/ zhizong_version（版本戳，
+  zhizong.__version__ 运行时取值）。包内其余键宽容面：打包工程细节
+  （format_version/compression 等）随实现自由演进，契约只钉解包对账所需的
+  最小自描述集（additionalProperties 恒 true，范式 B）。
+  物理居所 = ArchivePackage Location（archives/{guild}/packages/
+  {package}.tar.zst）的首个 tar 成员 manifest.json——包内文件非独立
+  磁盘文件，故 Location 取 urn 身份址；file Location 属 ArchivePackage，
+  片段语法不入语料。
+  字段格式纪律（DateYmd/sha256 标量无参数之家故不设，格式归 Description
+  与行为测试）：window.from/to =
+  UTC YYYYMMDD 八位数字串（与 CLI 窗参及包名日期段同源）；
+  media.path = 包内相对路径 media/{摘要前2位}/{内容寻址文件名}；
+  media.sha256 = 文件内容 sha256 完整摘要（64 位小写十六进制，与文件名
+  摘要段一致——名实复核归打包引擎，⑬-a 内容寻址）；created_at =
+  UTC ISO 8601 秒精度（YYYY-MM-DDTHH:MM:SSZ）。
+  采样对随本结构自愿落盘（对账执法归 archive
+  测试面：打包后 manifest = 实际包内容逐字段断言，格式面边界 4）。
+Location: urn:prometheus:type:Manifest
+Definition:
+  Form: record
+  Table:
+    - Field: window
+      Type: object
+      Required: true
+      Description: 打包窗口参数（纯日期窗；与包名 _from_.._to_.. 段一致，免读 manifest 即可定窗口的冗余自证）。
+      Fields:
+        - Field: from
+          Type: string
+          Required: true
+          Description: 窗口起点（UTC YYYYMMDD，不含——(from, to] 左开右闭）。
+        - Field: to
+          Type: string
+          Required: true
+          Description: 窗口终点（UTC YYYYMMDD，含）。
+    - Field: counts
+      Type: object
+      Required: true
+      Description: 窗口内三类实体计数（各自按自身 createTime 判窗，⑲-a；打包前对账基准——计数 vs 树扫描不一致即 exit 3，⑲-e）。
+      Fields:
+        - Field: feeds
+          Type: integer
+          Required: true
+          Description: 窗口内 feed 实体数。
+        - Field: comments
+          Type: integer
+          Required: true
+          Description: 窗口内评论（c_）实体数。
+        - Field: replies
+          Type: integer
+          Required: true
+          Description: 窗口内回复（r_）实体数。
+    - Field: media
+      Type: array<object>
+      Required: true
+      Description: 媒体并集清单（窗口实体 _p.media 的 file 并集，同内容跨窗/跨实体去重为单条目——内容寻址使然，⑬-a/⑲-c；空数组 = 窗口无媒体）。按文件名排序保确定性。
+      Fields:
+        - Field: path
+          Type: string
+          Required: true
+          Description: 包内相对路径（media/{摘要前2位}/{内容寻址文件名}，镜像 guild 树布局）。
+        - Field: sha256
+          Type: string
+          Required: true
+          Description: 文件内容 sha256 完整摘要（64 位小写十六进制；与文件名摘要段一致，名实不符 = 打包前对账失败 exit 3）。
+    - Field: created_at
+      Type: string
+      Required: true
+      Description: 包生成时刻（UTC ISO 8601 秒精度，YYYY-MM-DDTHH:MM:SSZ；与包名创建时刻段同源）。
+    - Field: zhizong_version
+      Type: string
+      Required: true
+      Description: 打包时 zhizong.__version__ 运行时戳（契约工具链溯源）。

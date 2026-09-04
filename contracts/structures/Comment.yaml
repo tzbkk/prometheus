@@ -1,0 +1,89 @@
+SchemaVersion: 1
+Type: structure
+Name: Comment
+Description: >-
+  评论实体：腾讯评论元素逐字原体（实测 29 字段，含 vecReply 嵌套克隆——verbatim
+  不剥离）+ _p 命名空间。评论与回复是两个结构，路径字面 c_ 前缀分治，
+  各 256 分片桶互不混合。实证：22,450 抽样 channelInfo 零存在（钉扎面较 Feed 少
+  此项——D1 薄钉的字面表述按实证修正）、createTime 全量字符串秒、字段集与回复
+  不同（29 vs 22）。冗余声明：回复在父评论 vecReply 与独立文件双存，verbatim
+  原则的代价，有意为之。
+Location: file:data/{guild}/comments/c_{comment_shard}/{comment_id}.json
+Parameters:
+  guild: {Type: GuildId}
+  comment_shard: {Type: Shard}
+  comment_id: {Type: CommentId}
+Lifecycle: rewrite-in-place
+Definition:
+  Form: record
+  Table:
+    - Field: id
+      Type: CommentId
+      Required: true
+      Description: 腾讯评论 ID（c_ 前缀），与文件名 {comment_id} 参数一致；kind 由字面前缀承载，读取库 kind_of 据此判定。
+    - Field: createTime
+      Type: string
+      Required: true
+      Description: 腾讯原体创建时间，十进制字符串秒（实证 22,450 抽样全量 string）；int 转换由读取库内存完成。
+    - Field: _p
+      Type: object
+      Required: true
+      Description: prometheus 捕获元数据命名空间（恒为 JSON 末键，写者纪律）。与 Feed 的 _p 同构，多一项 feed_id（页上下文注入——评论自身不知道属于哪个帖子）。
+      Fields:
+        - Field: feed_id
+          Type: FeedId
+          Required: true
+          Description: 所属帖子 ID（捕获时从列表页上下文注入）——评论到帖子的唯一归属链，读取库与归档窗口的计算依据。
+        - Field: captured_via
+          Type: string
+          Required: true
+          Description: 捕获通道溯源。值域未钉（我方字段但值域未收敛，string 起步）。
+        - Field: first_seen
+          Type: integer
+          Required: true
+          Description: 本实体首次落盘时刻（unix 毫秒），重拉永不改写。
+        - Field: last_seen
+          Type: integer
+          Required: true
+          Description: 本实体最近一次重拉确认时刻（unix 毫秒）。
+        - Field: media
+          Type: array<object>
+          Required: true
+          Description: 媒体引用清单（评论图片等；空数组=无媒体）。9 字段与 Feed.media 同构（ + download_url）；同 url 条目跨实体可指向同一文件（内容寻址去重，）。
+          Fields:
+            - Field: url
+              Type: string
+              Required: true
+              Description: 归一 URL（剥 dis_k/dis_t）——媒体唯一身份键、死 URL 集的键。
+            - Field: download_url
+              Type: string?
+              Required: false
+              Description: 最近观测的原签地址——下载器实际取的 URL；遗留块缺省（回退 url）。
+            - Field: file
+              Type: MediaFile?
+              Required: true
+              Description: 内容寻址文件名；null = 未下载。可空语法。
+            - Field: type
+              Type: string
+              Required: true
+              Description: 媒体类型（腾讯语义）。不钉枚举。
+            - Field: width
+              Type: integer?
+              Required: true
+              Description: 像素宽；null = 未测得。
+            - Field: height
+              Type: integer?
+              Required: true
+              Description: 像素高；null = 未测得。
+            - Field: status
+              Type: pending|ok|failed|dead
+              Required: true
+              Description: 下载状态机。枚举语法。
+            - Field: retries
+              Type: integer
+              Required: true
+              Description: 失败重试计数（晋升 dead 的判据）。
+            - Field: last_attempt_ts
+              Type: integer?
+              Required: true
+              Description: 最近下载尝试时刻（unix 毫秒）；null = 从未尝试。

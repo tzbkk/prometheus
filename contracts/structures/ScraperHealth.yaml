@@ -1,0 +1,13 @@
+SchemaVersion: 1
+Type: structure
+Name: ScraperHealth
+Description: >-
+  GET /health 响应（scraper）。存活探针 + 扫描计数。与孪生结构字段级同构（跨服务 (结构,指令) 唯一 ⇒ 平行成对文档）。
+Location: urn:prometheus:type:ScraperHealth
+Definition:
+  Form: record
+  Table:
+    - Field: scanned_feeds
+      Type: integer
+      Required: true
+      Description: 本进程生命周期内扫描过的 feed 数（单调计数）。

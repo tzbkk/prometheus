@@ -1,0 +1,2 @@
+{"pid": 4242, "dirty": true, "cycle": 12, "ts": 1782919557, "bottomReached": false}
+{"pid": 4243, "dirty": false, "cycle": 0, "ts": 1782919600, "bottomReached": true}

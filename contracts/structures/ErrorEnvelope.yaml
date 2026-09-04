@@ -1,0 +1,24 @@
+SchemaVersion: 1
+Type: structure
+Name: ErrorEnvelope
+Description: >-
+  语料全局 http 错误信封（zhizong 保留名）。四套
+  API（scraper/launcher/viewer/deepbackfill）同构错误形：
+  裸状态码 + 本信封体。不逐路由挂边：服务声明免携、消费端免认领。
+Location: urn:prometheus:type:ErrorEnvelope
+Definition:
+  Form: record
+  Table:
+    - Field: error
+      Type: object
+      Required: true
+      Description: 错误对象（唯一键）。
+      Fields:
+        - Field: code
+          Type: string
+          Required: true
+          Description: 机器可判错误码（窄起步不钉枚举，值收敛后再钉——原则）。
+        - Field: message
+          Type: string
+          Required: true
+          Description: 人类可读错误描述。

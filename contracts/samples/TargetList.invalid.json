@@ -1,0 +1,11 @@
+{
+  "targets": [
+    {
+      "name": "scraper",
+      "state": "starting",
+      "pid": 1,
+      "uptime_sec": 0,
+      "restarts": 0
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "targets": [
+    {
+      "name": "scraper",
+      "state": "running",
+      "pid": 1234,
+      "uptime_sec": 3600,
+      "restarts": 0
+    },
+    {
+      "name": "viewer",
+      "state": "stopped",
+      "pid": null,
+      "uptime_sec": null,
+      "restarts": 2
+    }
+  ]
+}

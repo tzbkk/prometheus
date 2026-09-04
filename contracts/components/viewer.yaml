@@ -1,0 +1,26 @@
+SchemaVersion: 1
+Type: component
+Name: viewer
+Description: >-
+  归档浏览器服务（确认 SPA 自消费形态）：SQLite(FTS5) 索引 + REST
+  API + 媒体 Range 服务（127.0.0.1:9422）。只读消费者——从实体树读四类
+  结构，无任何数据面 Downstream（索引是其内部实现细节，非契约面）。
+  API 声明无人认领：SPA 是浏览器内前端、非组件图节点，硬角色法下
+  service 声明 = 路面，消费者可选（例行确认）。分页 page/size 与搜索
+  q 为查询参数，不入指令边；二进制 /media/* 端点不入语料
+  （二进制无法 JSON 采样，由 MediaAsset 文件契约 + 行为测试覆盖）。
+ComponentType: service
+Binds: 127.0.0.1:9422
+Runs: python -m src.viewer.backend.server
+Upstream:
+  Feed: []
+  Comment: []
+  Reply: []
+  MediaAsset: []
+Downstream:
+  FeedList: ["GET /api/feeds", "GET /api/search"]
+  FeedDetail: "GET /api/feed/{feed_id}"
+  CommentList: "GET /api/feed/{feed_id}/comments"
+  GuildList: "GET /api/guilds"
+  ViewerStats: "GET /api/stats"
+  RebuildAck: "POST /api/rebuild"

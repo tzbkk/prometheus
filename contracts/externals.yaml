@@ -1,0 +1,24 @@
+qq-api:
+  Kind: http_api
+  Origin: https://pd.qq.com
+  Description: >-
+    QQ 频道 Web 端公开 API 家族（pd.qq.com 域）。两类消费面共用本源：
+    scraper 走 noauth commreader 端点族；deepbackfill 走 auth guild_feed_reader
+    （p_skey 经 ptlogin2 网页扫码登录铸造——external:qq-ptlogin，纯网
+    路线）。产出 Feed/Comment/Reply 三类实体。
+qq-cdn:
+  Kind: http_cdn
+  Origin: https://*.photo.store.qq.com + https://channel.qpic.cn（多区域主机家族）
+  Description: >-
+    媒体文件 CDN（实证主机家族：channelgz/worldgz/channelnj/worldtj.
+    photo.store.qq.com 与 channel.qpic.cn，按地域负载分散）。产出 MediaAsset
+    二进制；URL 即 _p.media[].url 的身份键。
+qq-ptlogin:
+  Kind: http_api
+  Origin: https://xui.ptlogin2.qq.com + https://ssl.ptlogin2.qq.com + https://ptlogin2.pd.qq.com（check_sig）
+  Description: >-
+    腾讯 ptlogin2 网页扫码登录家族（纯网路线，零部署）：xlogin 种子（appid=1600001587/daid=823，pd.qq.com 专属
+    对）→ ptqrshow 出二维码 PNG（qrsig，~2 分钟寿命）→ ptqrlogin 轮询
+    （ptqrtoken=hash33(qrsig,0)，节奏 ≥1.5s）→ check_sig 兑换 p_skey/p_uin/
+    uin。deepbackfill 凭据面唯一上游：服务端 AuthSessionManager 起 QR 会话、
+    二维码经 /auth/* 三端点在浏览器展示。无实体产出——只产凭据（conf/deepbackfill.conf.json 四键，0600）。

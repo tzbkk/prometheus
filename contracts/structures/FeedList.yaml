@@ -1,0 +1,61 @@
+SchemaVersion: 1
+Type: structure
+Name: FeedList
+Description: >-
+  viewer GET /api/feeds 与 GET /api/search 响应（同一结构服务两条指令——
+  指令串列表；search 返回同列表投影，LIKE 子串语义是行为规格）。列表项 =
+  精选投影 11 字段（投影是读取库合法职责）；首媒体缩略等
+  附加字段不入钉扎面。page/size 分页参数不入指令边。
+Location: urn:prometheus:type:FeedList
+Definition:
+  Form: record
+  Table:
+    - Field: feeds
+      Type: array<object>
+      Required: true
+      Description: 帖子投影对象数组（页内条目）。
+      Fields:
+        - Field: id
+          Type: FeedId
+          Required: true
+          Description: 帖子 ID（B_ 前缀）。
+        - Field: guild_id
+          Type: GuildId
+          Required: true
+          Description: 所属频道。
+        - Field: create_time
+          Type: string
+          Required: true
+          Description: 创建时间（十进制字符串秒，原体形态）。
+        - Field: title_text
+          Type: string?
+          Required: true
+          Description: 标题投影；无标题帖为 null。
+        - Field: author_nick
+          Type: string?
+          Required: true
+          Description: 作者昵称投影；匿名/缺失为 null。
+        - Field: author_id
+          Type: string?
+          Required: true
+          Description: 作者 ID 投影；缺失为 null。
+        - Field: author_avatar
+          Type: string?
+          Required: true
+          Description: 作者头像 URL 投影；缺失为 null。
+        - Field: like_count
+          Type: integer
+          Required: true
+          Description: 点赞数。
+        - Field: comment_count
+          Type: integer
+          Required: true
+          Description: 评论数。
+        - Field: image_count
+          Type: integer
+          Required: true
+          Description: 图片数。
+        - Field: video_count
+          Type: integer
+          Required: true
+          Description: 视频数。

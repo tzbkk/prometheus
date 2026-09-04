@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check src/ tests/
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # [contracts] extra: pillar-A conformance tests compile schemas via the
+      # zhizong library (rulings 9-11 test framework).
+      - run: pip install -e ".[contracts]" pytest
+      # Mandate gate must run BEFORE pytest: no test without a mandate,
+      # no mandate without a test (double-shot gate).
+      - run: python scripts/test_gate.py
+      - run: pytest tests/ -q
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/viewer/frontend/package-lock.json
+      - working-directory: src/viewer/frontend
+        run: |
+          npm ci
+          npm run build
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+
+      # QQ's API is not reliably reachable from GitHub runners, so live
+      # scraping can't gate CI. Seed synthetic entity-tree feeds instead
+      # (data/<guild>/feeds/<id[:4]>/<id>.json); the viewer smoke below
+      # exercises the real directory-scan indexing + API path end-to-end.
+      - name: Seed synthetic entity-tree feeds
+        run: |
+          mkdir -p data/7743321643036658
+          python - <<'PY'
+          import json, os, time
+          from src.entity_store.paths import shard_of
+          feeds = [
+              {"id": "B_seed_feed_one_001X60", "createTime": str(int(time.time())),
+               "title": {"contents": [{"text_content": {"text": "CI seed feed one"}}]},
+               "poster": {"nick": "ci", "id": "1"}},
+              {"id": "B_seed_feed_two_002X60", "createTime": str(int(time.time())),
+               "title": {"contents": [{"text_content": {"text": "高木 seed feed two"}}]},
+               "poster": {"nick": "ci", "id": "1"}},
+          ]
+          for feed in feeds:
+              feed["_p"] = {"captured_via": "ci", "first_seen": time.time_ns() // 1_000_000, "media": []}
+              shard = f"data/7743321643036658/feeds/B_{shard_of(feed['id'])}"
+              os.makedirs(shard, exist_ok=True)
+              with open(f"{shard}/{feed['id']}.json", "w") as f:
+                  json.dump(feed, f, ensure_ascii=False)
+          PY
+
+      # === Viewer backend functional test ===
+      - name: Start viewer backend
+        run: |
+          mkdir -p db
+          python -m src.viewer.backend.server --port 9422 &
+          echo $! > /tmp/viewer.pid
+          for i in $(seq 1 10); do
+            curl -sf http://127.0.0.1:9422/api/stats && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9422/api/stats || { echo "FAIL: server did not start"; exit 1; }
+
+      - name: Test feeds API
+        run: |
+          curl -s 'http://127.0.0.1:9422/api/feeds?size=5' | python -c "
+          import json, sys
+          feeds = json.load(sys.stdin)
+          assert isinstance(feeds, list), f'expected list, got {type(feeds)}'
+          assert len(feeds) > 0, 'no feeds returned'
+          print(f'GET /api/feeds?size=5 -> {len(feeds)} feeds')
+          "
+
+      - name: Test stats API
+        run: |
+          curl -s http://127.0.0.1:9422/api/stats | python -c "
+          import json, sys
+          stats = json.load(sys.stdin)
+          assert isinstance(stats, dict)
+          print(f'GET /api/stats -> {list(stats.keys())}')
+          "
+
+      - name: Test search API
+        run: |
+          curl -s 'http://127.0.0.1:9422/api/search?q=高木' | python -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          count = len(data) if isinstance(data, list) else 'dict'
+          print(f'GET /api/search?q=高木 -> {count} results')
+          "
+
+      - name: Stop viewer
+        if: always()
+        run: kill $(cat /tmp/viewer.pid) 2>/dev/null || true
+
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .[contracts]
+      - run: zhizong validate

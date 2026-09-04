@@ -1,0 +1,22 @@
+SchemaVersion: 1
+Type: structure
+Name: ViewerStats
+Description: >-
+  viewer GET /api/stats 响应（stats 单命名 snake_case；
+  摄取摘要 + 库元数据，元数据附加字段不入钉扎面）。
+Location: urn:prometheus:type:ViewerStats
+Definition:
+  Form: record
+  Table:
+    - Field: feeds
+      Type: integer
+      Required: true
+      Description: 已索引 feed 数。
+    - Field: comments
+      Type: integer
+      Required: true
+      Description: 已索引评论数（含回复）。
+    - Field: media
+      Type: integer
+      Required: true
+      Description: 已索引媒体数。

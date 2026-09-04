@@ -1,0 +1,795 @@
+# Prometheus 测试契约登记册（mandate register，）
+#
+# 人类署名工件：每行 asserts 为作者可审的一行中文；AIGC 不得绕过登记册私增测试。
+# 硬规则：
+#   1. 测试函数名 = "test_" + name 逐字对应（平铺函数，无测试类；node ID 机械匹配）
+#   2. scripts/test_gate.py 强制 pytest 收集集 ↔ mandate 集严格双向对等——
+#      孤儿测试（无 mandate）或空 mandate（无实现）→ CI 红
+#   3. 新增测试 = 先加 mandate 行（作者审）→ 再写实现（TDD 变体）
+#   4. implements 溯源必填：契约条款 / 文档条款优先
+#   5. 禁 parametrize：一个函数展开 N 个 node ID，name ↔ node 双射被破坏
+#
+# ⚠️ 本文件不得移入 contracts/——zhizong loader 会把其中 *.yaml 当语料文档解析而炸。
+
+version: 1
+mandates:
+  - id: MD-001
+    suite: smoke/shell
+    name: shell_parses_start_stop_restart_and_logs_for_every_target
+    asserts: start/stop/restart/logs 四动词 × scraper/deepbackfill/viewer 三目标全部解析为 Cmd(verb, noun)
+    implements:  烟雾层（shell 核心命令解析）· scraper/deepbackfill/viewer 三目标面 · src/launcher/commands.py CommandParser
+    pillar: smoke
+  - id: MD-002
+    suite: smoke/shell
+    name: shell_parses_core_commands_and_stats
+    asserts: status/tail → UnknownCommandError（退役）；stats 带参 → MissingArgumentError；quit/health/help/clear/空行 与 config show|set 解析为对应 Cmd（大小写与空白归一）
+    implements:  烟雾层（shell 核心命令解析）· src/launcher/commands.py CommandParser
+    pillar: smoke
+  - id: MD-003
+    suite: smoke/shell
+    name: shell_rejects_unknown_verb_missing_target_and_invalid_target
+    asserts: 未知动词/缺目标/非法目标（qq/tui/archive 非监督目标天然被拒）/config 缺参/tail 名词非法分别显式抛对应错误
+    implements:  烟雾层（shell 解析 fail loud）· src/launcher/commands.py 异常面（三目标白名单）
+    pillar: smoke
+  - id: MD-004
+    suite: smoke/launcher
+    name: launcher_api_serves_targets_snapshot_on_live_port
+    asserts: port=0 临时端口启动 LauncherApi 后 GET /targets 返回 200 + TargetList 形三目标富对象（stopped 空态 pid/uptime null、restarts 0）
+    implements: 契约 components/launcher.yaml /targets 指令边（TargetList 快照语义）
+    pillar: smoke
+  - id: MD-005
+    suite: smoke/launcher
+    name: launcher_api_returns_404_error_envelope_for_unknown_route
+    asserts: GET 未知路径返回 HTTP 404 + ErrorEnvelope 体 {error:{code,message}}（API 存活的负半边）
+    implements: 契约 ErrorEnvelope.yaml（ 裸状态码+信封）
+    pillar: smoke
+  - id: MD-009
+    suite: smoke/supervision
+    name: supervisor_runs_start_stop_cycle_for_viewer
+    asserts: viewer 目标 start 后状态 running、stop 后 stopped 且进程表清空（监督机制，Popen 外层缝替身）
+    implements:  烟雾层 · src/launcher/process_manager.py viewer 面
+    pillar: smoke
+  - id: MD-010
+    suite: smoke/supervision
+    name: supervisor_runs_start_stop_cycle_for_scraper
+    asserts: scraper 目标 start 后状态 running、stop 后 stopped 且进程表清空（监督机制，Popen 外层缝替身）
+    implements:  烟雾层 · src/launcher/process_manager.py scraper 面
+    pillar: smoke
+  - id: MD-011
+    suite: smoke/supervision
+    name: supervisor_status_covers_three_targets_with_restart_counts
+    asserts: status_all 覆盖三目标富对象（name/state/pid/uptime_sec/restarts 键齐）+ restart_counts 三键零起点 + 空态 pid/uptime null
+    implements: TargetList/TargetStatus 富对象（scraper/deepbackfill/viewer 三目标）· src/launcher/process_manager.py 状态面
+    pillar: smoke
+  - id: MD-012
+    suite: entity_store/paths
+    name: entity_paths_round_trip_construct_and_resolve
+    asserts: feed/comment/reply/media 四类路径构造逐字命中契约 Location 模板（sha256[:2] 分桶、B_/c_/r_ 前缀分治、媒体摘要前 2 位）且 resolve 逆解析完整还原 kind/guild/id
+    implements: 契约 structures/{Feed,Comment,Reply,MediaAsset}.yaml Location 模板 + /D3/⑬-a
+    pillar: format
+  - id: MD-013
+    suite: entity_store/paths
+    name: entity_paths_fail_loud_on_malformed_id_and_path
+    asserts: 未知前缀（x_bad）/空体/错 kind id/非法媒体扩展名/短路径/错桶文件与 resolve("x_bad") 一律 raise PathFormatError（非 None/静默）
+    implements: 契约 MediaAsset Productions 语法 +  前缀分治（fail loud 原则）
+    pillar: format
+  - id: MD-014
+    suite: entity_store/paths
+    name: entity_shard_distribution_covers_two_hex_buckets
+    asserts: 合成 id 批量分片落 2 位小写十六进制桶（256 桶语义）且批量覆盖半数以上桶、同 id 分片确定（分布 sanity）
+    implements:  各 256 分片桶互不混合（sha256 摘要前 2 位）
+    pillar: format
+  - id: MD-015
+    suite: entity_store/paths
+    name: process_lock_round_trip_and_stale_pid_verdict
+    asserts: 锁写读往返 5 字段逐字（pid/dirty/cycle/ts/bottomReached，原子写无 .tmp 残留）；缺/多字段 fail loud；stale-pid 读判死 pid=true 活 pid=false 且不删文件
+    implements: 契约 structures/ProcessLock.yaml（/② 全钉 5 字段 + transient 语义）
+    pillar: format
+  - id: MD-016
+    suite: entity_store/writer
+    name: writer_output_passes_compiled_schemas
+    asserts: 写出的 feed/comment/reply 实体重读后过 zhizong 编译 Schema（conformance）；坏样本（status 手误枚举/file 违反内容寻址语法）被 Schema 拒收
+    implements: 契约 structures/{Feed,Comment,Reply}.yaml（zhizong 当库 compile_structure，枚举/⑬-a 文件名语法）
+    pillar: contract
+  - id: MD-017
+    suite: entity_store/writer
+    name: writer_serialization_discipline_bytes
+    asserts: 写产物字节逐字 = json.dumps(indent=2, ensure_ascii=False)——UTF-8 无 BOM、中文直存非 \u 转义、腾讯顶层键序保持、_p 恒末键、_p 内键序 = 契约表序（Comment 多首键 feed_id）
+    implements:  写入规范（全体适用的序列化纪律逐字）
+    pillar: format
+  - id: MD-018
+    suite: entity_store/writer
+    name: writer_repull_merges_p_lifecycle
+    asserts: 重拉写后顶层 = 新载荷逐字（旧独有键消失、新键序为准）、first_seen 保留旧值、last_seen=now、media 只填不删（同 url 新 8 字段块整体替换、仅旧有条目原序追加、新清单序在前）
+    implements:  可变性 + §4.2（整文件重写语义）
+    pillar: format
+  - id: MD-019
+    suite: entity_store/writer
+    name: writer_promotes_failed_media_to_dead_at_three_retries
+    asserts: 写前判非事后扫——status=failed 且 retries>=3 的媒体条目写出为 dead；retries=2 的 failed 与 retries>=3 的 pending 均不晋升；重拉合并路径同样晋升
+    implements: 契约 Feed.yaml _p.media.status Description（晋升规则）
+    pillar: format
+  - id: MD-020
+    suite: entity_store/writer
+    name: writer_backfill_freezes_both_clocks
+    asserts: touch_clocks=False 重写实体——first_seen/last_seen 冻结于存量值而 media 回填（file/status/last_attempt_ts）照常落盘；backfill 无存量文件 → raise
+    implements: （实体观测与媒体尝试是两本时钟——backfill 回填不动时钟）
+    pillar: format
+  - id: MD-021
+    suite: entity_store/writer
+    name: writer_crash_before_replace_leaves_original_bytes
+    asserts: 崩溃注入（os.replace 抛错）→ 原文件字节逐字不变、异常向上传播、.tmp 残留于同目录 with_suffix 命名（可接受）
+    implements:  原子替换纪律（.tmp + fsync + os.replace）
+    pillar: format
+  - id: MD-022
+    suite: entity_store/writer
+    name: writer_fails_loud_on_contract_violations
+    asserts: 载荷夹带 _p/body id 不符/评论缺 feed_id/feed 传 feed_id/media 条目缺 url/存量文件缺 _p 或损坏/未知 id 前缀一律 raise（无多路回退、无静默跳过）
+    implements: 严格解析原则（边界 fail loud；契约 _p 全钉）
+    pillar: format
+  - id: MD-023
+    suite: entity_store/reader
+    name: reader_projections_project_tencent_fields
+    asserts: 六投影函数正例逐字——kind_of 前缀判定/text_of contents 遍历拼接/author_of 三键含头像/created_at_of 字符串秒转 int/media_of 逐条 _p.media/target_of 定位三键与顶层 None 分支
+    implements:  API 块（投影唯一合法居所，函数签名逐字）
+    pillar: format
+  - id: MD-024
+    suite: entity_store/reader
+    name: reader_vecreply_clone_projects_as_reply
+    asserts: 含 vecReply 的合成评论落盘后克隆逐字存活（verbatim 不剥离），对嵌套克隆五投影按 reply 语义生效；克隆无 _p，media_of 拒绝作用于此（media 是文件级命名空间）
+    implements: /§4.1（vecReply 克隆双存 verbatim）+ Comment 契约 _p 文件级语义
+    pillar: format
+  - id: MD-025
+    suite: entity_store/reader
+    name: reader_projections_leave_document_unmutated
+    asserts: 全六函数+重复 load 调用前后实体文件字节与文档深度相等；author_of 产物为新建对象（改写不波及原文档）；media_of 按投影签名返回 _p.media 列表本体（消费者只读约定）——投影纯度
+    implements:  范式 B（原体一字不动——投影不得 mutate 文档；_p.media 签名逐字）
+    pillar: format
+  - id: MD-026
+    suite: entity_store/reader
+    name: reader_strict_load_fails_loud_on_missing_p
+    asserts: 严格加载负例——缺 _p 文档/JSON 损坏/顶层非数组对象一律 ReaderError；未加载文档 media_of 与畸形切片（未知 id 前缀/缺 postUser/坏 createTime/非对象 richContents/targetUser）同样 raise（无多路回退）
+    implements: 严格解析原则（读侧边界 fail loud）
+    pillar: format
+  - id: MD-027
+    suite: entity_store/scan
+    name: scan_counts_per_feed_and_collects_dead_urls
+    asserts: 合成树 scan 一趟产出 per-feed comment/reply 计数逐字精确（增长检测输入）+ dead-URL 集恰含 _p.media status=dead 的 url（pending/failed 不入）；扫描前后树文件集不变（派生态纯内存零落盘，原则 3）
+    implements:  增长检测终案（一机制两用：per-feed 计数 + dead-URL 集）
+    pillar: format
+  - id: MD-028
+    suite: entity_store/scan
+    name: scan_skips_malformed_entities_with_warning
+    asserts: 树含畸形实体（损坏 JSON/缺 _p/错分片桶/缺 _p.feed_id/media 非数组/条目缺 url）→ logging.warning + skipped 计数、不崩溃、合法实体照常入账且幽灵 dead 状态不泄漏（宽容遍历——边界严格性归 load 侧的有意分工）
+    implements:  启动扫描宽容遍历语义（严格性归 reader.load_entity/审计）
+    pillar: format
+  - id: MD-029
+    suite: entity_store/scan
+    name: iter_window_half_open_on_create_time
+    asserts: iter_window (from,to] 半开窗逐字——createTime==from 排除/==to 含入；feed/comment/reply 三类各按自身 createTime 判窗，且与 _p.last_seen 观测时钟双向无关（正反例）；createTime 畸形实体 skip+log
+    implements: （窗口时钟=业务时钟 createTime）+ §二 created_at_of 投影复用
+    pillar: behavior
+  - id: MD-030
+    suite: entity_store/scan
+    name: iter_window_inversion_raises_and_missing_guild_is_empty
+    asserts: 倒序/零宽窗 from_ts>=to_ts 与非 int 窗参 → ValueError（fail loud）；guild 根不存在 → scan 空 ScanResult 且 iter_window 零产出（fresh install 零异常，邻树互不干扰）
+    implements: （窗参数边界 fail loud，业务窗校验归 archive）+ 空树语义
+    pillar: behavior
+  - id: MD-031
+    suite: entity_store/audit
+    name: fixtures_tree_audits_clean
+    asserts: contracts/fixtures 全树审计零违例 exit 0——4 实体 + 3 媒体名逐文件过 zhizong Schema 与写者纪律域检；范围外文件（prometheus.lock/归档包）计数列出不混入违例
+    implements: （审计为 prometheus 侧工具不进 zhizong）+ 契约 structures/{Feed,Comment,Reply,MediaAsset}.yaml
+    pillar: contract
+  - id: MD-032
+    suite: entity_store/audit
+    name: seeded_corrupt_json_named_and_nonzero
+    asserts: 播坏副本（tmp 树）JSON 损坏 → 恰一条 CORRUPT_JSON 点名该文件 + exit 1（点名语义，非 scan 宽容跳过）
+    implements: 严格解析原则（审计逐文件点名）+ audit_tree CORRUPT_JSON 类别
+    pillar: contract
+  - id: MD-033
+    suite: entity_store/audit
+    name: seeded_missing_p_named_and_nonzero
+    asserts: 播坏副本实体删 _p → 恰一条 _P_MISSING 点名该文件 + exit 1（范式 B：每实体文件必有 _p）
+    implements:  范式 B + audit_tree _P_MISSING 类别
+    pillar: contract
+  - id: MD-034
+    suite: entity_store/audit
+    name: seeded_p_not_last_named_and_nonzero
+    asserts: 播坏副本实体 _p 提为首键（键集不变）→ 恰一条 _P_NOT_LAST 点名该文件 + exit 1（契约不可表达的键序纪律由审计兜底）
+    implements: Feed.yaml _p Description（恒为 JSON 末键，审计兜底）+ audit_tree _P_NOT_LAST 类别
+    pillar: contract
+  - id: MD-035
+    suite: entity_store/audit
+    name: seeded_p_key_order_named_and_nonzero
+    asserts: 播坏副本实体 _p 内键序打乱（键集不变）→ 恰一条 _P_KEY_ORDER 点名该文件 + exit 1（_p 内键序 = 契约表序，Comment/Reply 多首键 feed_id）
+    implements:  写入规范（_p 键序 = writer 构造序）+ audit_tree _P_KEY_ORDER 类别
+    pillar: contract
+  - id: MD-036
+    suite: entity_store/audit
+    name: seeded_shard_mismatch_named_and_nonzero
+    asserts: 播坏副本 feed 复制进错分片桶 → 恰一条 SHARD_MISMATCH 点名该文件 + exit 1（桶↔id 一致性；路径级失败短路文档级检查为有意级联）
+    implements: 契约 Location 模板分片规则（sha256[:2]，）+ audit_tree SHARD_MISMATCH 类别
+    pillar: contract
+  - id: MD-037
+    suite: entity_store/audit
+    name: seeded_id_mismatch_named_and_nonzero
+    asserts: 播坏副本实体文档 id 改指他处（Schema 合法形态）→ 恰一条 ID_MISMATCH 点名该文件 + exit 1（文件名即实体身份）
+    implements: 契约 Feed.yaml id Description（与文件名 {feed_id} 一致）+ audit_tree ID_MISMATCH 类别
+    pillar: contract
+  - id: MD-038
+    suite: entity_store/audit
+    name: seeded_guild_mismatch_named_and_nonzero
+    asserts: 播坏副本 feed channelInfo.sign.guild_id 改指他频道（Schema 合法形态）→ 恰一条 GUILD_MISMATCH 点名该文件 + exit 1（多频道树定根字段与所在目录一致）
+    implements: 契约 Feed.yaml guild_id Description（与 Location {guild} 一致）+ audit_tree GUILD_MISMATCH 类别
+    pillar: contract
+  - id: MD-039
+    suite: entity_store/audit
+    name: seeded_media_name_invalid_named_and_nonzero
+    asserts: 播坏副本 media/ 植入违反 64-hex 内容寻址语法的文件名 → 恰一条 MEDIA_NAME_INVALID 点名该文件 + exit 1（零二进制读，仅名形态与桶位）
+    implements: 契约 MediaAsset/MediaFile Productions（ 内容寻址语法）+ audit_tree MEDIA_NAME_INVALID 类别
+    pillar: contract
+  - id: MD-040
+    suite: entity_store/audit
+    name: seeded_schema_fail_named_and_nonzero
+    asserts: 播坏副本 feed _p.media 植入手误枚举 status=deas 的 8 字段条目 → 恰一条 SCHEMA_FAIL 点名该文件与 JSON 路径 + exit 1（zhizong 当库编译 Schema 逐实体校验）
+    implements: 契约 Feed.yaml _p.media.status 枚举+ audit_tree SCHEMA_FAIL 类别
+    pillar: contract
+  - id: MD-041
+    suite: harness/viewer_demo
+    name: harness_viewer_serves_api_stats_on_temp_port
+    asserts: harness 起存量 viewer（ViewerServer port=0 临时端口 + tmp SQLite）→ GET /api/stats 打到 200 即断（形状断言归 tests/viewer/ 的 ViewerStats 边）
+    implements: demo 验收（ harness 面）
+    pillar: smoke
+  - id: MD-042
+    suite: harness/deepbackfill
+    name: harness_deepbackfill_health_conforms_schema
+    asserts: 实现态服务起临时端口 → GET /health 200 且响应体过 DeepbackfillHealth 编译 Schema（scanned_feeds=runner 真计数——空跑为 0）
+    implements: 契约 components/deepbackfill.yaml + structures/DeepbackfillHealth.yaml（实现态 /health 断言）
+    pillar: contract
+  - id: MD-043
+    suite: harness/deepbackfill
+    name: harness_deepbackfill_edges_implemented
+    asserts: 契约其余四指令边（GET /stats、GET|PUT /config、GET /logs、POST /action/trigger-daemon）实现态全通（各边深度执法归 tests/deepbackfill/test_service.py）
+    implements: 契约 ErrorEnvelope.yaml（ 裸状态码+信封）· 四指令边实现态
+    pillar: contract
+  - id: MD-044
+    suite: web_scraper/store
+    name: synthetic_cycle_writes_only_entity_media_lock_files
+    asserts: 合成抓取 run 后 tmp 数据根 rglob 全集 ⊆ {实体 json, 媒体文件, prometheus.lock}——jsonl/ids/state/checkpoints 十类 bookkeeping 名零命中且正样本（2 帖/3 评/4 媒体/锁）齐在
+    implements: 契约 components/scraper.yaml（实体树写入）
+    pillar: contract
+  - id: MD-045
+    suite: web_scraper/store
+    name: every_written_entity_passes_compiled_schemas
+    asserts: run 落盘的全部实体过 Feed/Comment/Reply 编译 Schema（fixture 复用）+ _p 恒末键/键序 + ok 媒体块文件名 64hex 语法且磁盘实存 + url 归一（dis_k/dis_t 剥除）
+    implements: 契约 structures/{Feed,Comment,Reply}.yaml（_p 全钉 + MediaAsset 文件名 grammar，⑬-a）
+    pillar: contract
+  - id: MD-046
+    suite: web_scraper/store
+    name: malformed_tencent_payloads_skip_and_log_without_writes
+    asserts: 畸形腾讯载荷（非对象/id 前缀错/createTime 非串/缺 sign/guild 不符/feed_id 非法）逐条 skip 且每条恰一条 warning、数据根零文件
+    implements: 严格解析原则（fail loud at boundary，与 scan 宽容语义对齐）
+    pillar: contract
+  - id: MD-047
+    suite: web_scraper/growth
+    name: growth_targets_parameter_table
+    asserts: API commentCount vs 本地评论文件数参数表八分支（增长/持平/落后/无账/零计/空面/双空/混合）——重拉集恰为 api>local 的 feed 集
+    implements:  无记忆比较终案
+    pillar: behavior
+  - id: MD-048
+    suite: web_scraper/growth
+    name: dead_urls_prechecked_and_failed_media_promoted_via_writer
+    asserts: scan 派生死集 → 新引用直接标 dead 零网络；三次失败 retries=3 → writer 写前晋升 dead 并回灌死集（他实体新引用免试）；媒体改写全程 first_seen/last_seen 冻结
+    implements: （晋升规则 + 两本时钟）+ §六（死集一机制两用）+ 契约 Feed.yaml _p.media.status
+    pillar: behavior
+  - id: MD-049
+    suite: web_scraper/live
+    name: live_five_endpoints_conform_contracted_schemas
+    asserts: 活体 :9420 五指令边（health/stats/config GET+PUT/logs/action）响应逐一过对应编译 Schema；PUT /config 部分字段合并后回显新态全文（㉖）；trigger 幂等重复 true
+    implements: 契约 components/scraper.yaml Downstream 五结构 + （PUT 回显）
+    pillar: contract
+  - id: MD-050
+    suite: web_scraper/live
+    name: live_unknown_route_and_malformed_config_put_return_error_envelope
+    asserts: 未知路由 404 + ErrorEnvelope；PUT /config 坏 JSON/非对象体/guilds 键 → 400 + ErrorEnvelope（code=bad_request/guilds_readonly）
+    implements: 契约 ErrorEnvelope.yaml（ 裸状态码+信封）
+    pillar: contract
+  - id: MD-051
+    suite: web_scraper/live
+    name: live_harness_red_on_wrong_typed_stats_mock
+    asserts: stats 字段类型手工错造（feeds→str）passthrough 直达响应 → schema_assert(ScraperStats) 必抛 AssertionError——harness 执法不被服务侧遮蔽
+    implements: 负例（harness 红 = 契约执法闭环）+  harness 面
+    pillar: contract
+  - id: MD-052
+    suite: entity_store/reader
+    name: reader_feed_projections_title_and_poster
+    asserts: feed 侧双投影——title_of 走 title.contents 非空段空格拼接（无标题/无文本段 → None）、poster_of 三键 {id,nick,avatar_url}（poster 整缺 None、部分在场槽位 None）；title/poster 畸形容器 ReaderError；投影不 mutate 文档
+    implements: reader feed 侧投影扩展（腾讯双形状实证）+ 契约 structures/FeedList.yaml title_text/author_* 可空投影
+    pillar: format
+  - id: MD-053
+    suite: viewer/index
+    name: tree_index_api_three_level_alignment
+    asserts: 合成双 guild 树（writer 落盘）→ scan() 树级计数 = SQLite 索引行数（feeds/comments/media）= 活体 API 计数（stats + /api/feeds 分页累计 + comments 累计 + guild 过滤面）——边界 5 三级对齐
+    implements: 契约 components/viewer.yaml（树→索引→API 三级对齐）
+    pillar: format
+  - id: MD-054
+    suite: viewer/live_api
+    name: live_six_endpoints_conform_contracted_schemas
+    asserts: 活体 :9422 七路由六结构（feeds/search 同 FeedList、feed 详情、comments、guilds、stats、rebuild）逐一过编译 Schema；含 nullable 字段实例（无标题帖）、create_time 字符串秒原体形态、media.path 全路径（㉒-c）
+    implements: 契约 components/viewer.yaml Downstream 六结构 + structures/{FeedList,FeedDetail,CommentList,GuildList,ViewerStats,RebuildAck}.yaml
+    pillar: contract
+  - id: MD-055
+    suite: viewer/live_api
+    name: live_empty_tree_serves_200_and_error_envelope_negatives
+    asserts: 空 data 根（无 guild 目录）→ feeds/guilds/comments/stats 一律 200 空列表/零计数（优雅降级非 500）；未知 feed/未知路由 404、坏分页/缺 q 400、GET rebuild 405——一律 ErrorEnvelope
+    implements: 契约 ErrorEnvelope.yaml+ 负例（空树 200）
+    pillar: contract
+  - id: MD-056
+    suite: viewer/live_api
+    name: rebuild_endpoint_refreshes_index_for_newly_written_entities
+    asserts: 活体写入新实体（writer 直写树）→ POST /api/rebuild 受理（RebuildAck accepted，幂等重受）→ 轮询 /api/stats 至新计数 → /api/feeds 新帖居首——索引非事实源、可随时从树再生
+    implements: 契约 structures/RebuildAck.yaml（异步受理 + stats 轮询）+ 派生索引可再生原则
+    pillar: behavior
+  - id: MD-057
+    suite: viewer/media
+    name: media_serving_honors_range_and_content_type
+    asserts: /media/<guild>/<shard>/<file> 全量 200 + Content-Type 按扩展名（png/mp4）+ Accept-Ranges；bytes=0-3 与后缀 bytes=-4 → 206 精确字节与 Content-Range；不可满足/多段 Range → 416；错桶/穿越 403、缺文件 404——行为层（二进制不入契约断言）
+    implements: 契约 MediaAsset.yaml Location 模板 + 附带（Range 语义行为测试）
+    pillar: behavior
+  - id: MD-058
+    suite: viewer/media
+    name: two_segment_media_url_serves_via_index_reverse_lookup
+    asserts: 两段 /media/<guild>/<file> 经 SQLite 媒体索引反查分片路径（media ∪ comment_media）——命中 200 字节相等 + Range 206；未索引孤儿/畸形名/非数字 guild → 404 ErrorEnvelope；三段 canonical 并行可用——零前端改动兼容
+    implements: 附带（/media/* 二进制面行为层自由）+ 前端 mediaUrl() 两段拼接形态
+    pillar: format
+  - id: MD-059
+    suite: archive/engine
+    name: window_package_mirrors_tree_slice_and_manifest_matches_content
+    asserts: 解包对账（边界 4）——包成员集 = 窗内实体镜像（字节等价）+ 媒体并集（双实体同引用去重单成员）+ manifest.json；manifest 逐字段 = 实际包内容（window/counts/media[{path,sha256}]/created_at/zhizong_version）且过 Manifest 编译 Schema；包名 = PackageName grammar
+    implements: 契约 structures/{Manifest,PackageName,ArchivePackage}.yaml + 包语义（树切片镜像 + 媒体并集 + manifest）+ （薄钉六要素）
+    pillar: format
+  - id: MD-060
+    suite: archive/engine
+    name: window_math_parameter_table
+    asserts: (from,to] 窗口数学参数表——from 日零点排除/次秒含入、to 日末秒含入/次日零点排除、from==to 单日窗合法、空窗 is_empty；三类实体各自按自身 createTime 判窗（comment 窗内而父帖窗外）；倒序/非法日历/未来窗/非 8 位 → WindowError（exit 2 判据）
+    implements: （窗口时钟 = 业务时钟 createTime、窗参 fail loud）
+    pillar: behavior
+  - id: MD-061
+    suite: archive/engine
+    name: prepack_reconciliation_fails_loud
+    asserts: 打包前对账——损坏 JSON/id 与文件名不符（宽容 iter_window 会静默跳过即计数不一致）/引用媒体缺盘/内容 sha256 与文件名摘要段不符（⑬-a 名实一致）一律 ReconciliationError（exit 3 面）；.tmp 写者崩溃残留不阻塞（纪律内 artifact）
+    implements: 打包前对账失败独立码（数据完整性优先）+ ⑬-a（内容寻址名实一致）
+    pillar: behavior
+  - id: MD-062
+    suite: archive/engine
+    name: package_enumeration_faces
+    asserts: 枚举面——list_guilds = 含 feeds/comments 子树的数字目录升序（缺根空表）；list_packages = PackageName grammar 过滤、创建时刻降序、guild 过滤/全频道并集、非 grammar 文件不进清单
+    implements: 契约 structures/{GuildId,PackageName}.yaml（枚举过滤面）+ 引擎枚举函数 list_guilds/list_packages（CLI 通道消费）
+    pillar: behavior
+  - id: MD-063
+    suite: archive/cli
+    name: cli_exit_codes_window_dry_run_and_apply
+    asserts: CLI 通道 exit codes——dry-run 零落包 0；--apply 落包 {output}/{guild}/packages/ 且名 = PackageName grammar；同刻重打未 --force → 1/--force → 0；窗参四形态 → 2；空窗 0；计数不一致树 → 3；未知 guild → 1（全码位）
+    implements: 契约 components/archive.yaml（CLI 入口手动/cron 通道）· exit codes 全码位
+    pillar: behavior
+  - id: MD-069
+    suite: smoke/supervision
+    name: supervisor_runs_start_stop_cycle_for_deepbackfill
+    asserts: deepbackfill 目标 start 后状态 running、stop 后 stopped 且进程表清空（ 监督面）
+    implements: （deepbackfill 常驻目标 :9424）
+    pillar: smoke
+  - id: MD-070
+    suite: smoke/supervision
+    name: supervisor_crashed_process_reports_failed_state
+    asserts: 在管进程退出且未被 stop 清账 → status_of 报 failed 态（pid/uptime null）——三态窄起步真实可观测
+    implements: 契约 structures/TargetStatus.yaml（stopped|running|failed 三态）
+    pillar: smoke
+  - id: MD-071
+    suite: launcher/targets
+    name: live_targets_family_conforms_contracted_schemas
+    asserts: 活体临时端口——GET /targets 过 TargetList 编译 Schema（三目标富对象）、GET /targets/{t} 过 TargetStatus、GET /targets/{t}/logs 过 LogTail（?tail=N 尾行语义、无日志空数组）
+    implements: 契约 components/launcher.yaml /targets 家族指令边 + structures/{TargetList,TargetStatus,LogTail}.yaml
+    pillar: contract
+  - id: MD-072
+    suite: launcher/targets
+    name: live_target_actions_idempotent_return_current_state
+    asserts: 幂等——重复 start 已运行 → 200 当前态（同 pid）；stop 已停 → 200 stopped 态；restart → 200 新态（新 pid、restarts +1）
+    implements: 幂等 + 裸状态码 · structures/TargetStatus.yaml
+    pillar: contract
+  - id: MD-073
+    suite: launcher/targets
+    name: live_unknown_target_and_route_return_error_envelope
+    asserts: GET /targets/qq（非监督目标）与 POST /targets/qq/start → 404 ErrorEnvelope；未知路由/未知动作/错方法 → 404 ErrorEnvelope——TargetName 枚举外天然被拒
+    implements: 契约 structures/TargetName.yaml（值域外被拒，三枚举）+ ErrorEnvelope.yaml
+    pillar: contract
+  - id: MD-074
+    suite: launcher/config
+    name: live_config_get_put_echoes_merged_full_object
+    asserts: GET /config 过 LauncherConfig 编译 Schema（guilds 薄钉）；PUT 部分字段 → 合并回显完整新态全文（guilds 保留）+ 原子落盘复读（guilds 不入 launcher 键文件）；含 guilds 键 → 400 guilds_readonly、坏 JSON → 400 bad_request（ErrorEnvelope）
+    implements: （PUT 回显双向载荷）+ launcher 单写者原子写 + structures/LauncherConfig.yaml
+    pillar: contract
+  - id: MD-075
+    suite: launcher/shutdown
+    name: live_shutdown_accepts_and_stops_all_targets
+    asserts: 三目标运行中 POST /shutdown → 200 ShutdownAck accepted 且全部目标转 stopped、退出回调受理后触发——README 停止方式的 API 形态
+    implements: 契约 structures/ShutdownAck.yaml（优雅关停全部目标）+ components/launcher.yaml POST /shutdown 指令边
+    pillar: contract
+  - id: MD-076
+    suite: e2e/lifecycle
+    name: scan_empty_tree_yields_zero_counts_and_no_dead_urls
+    asserts: e2e 环 1——空数据根 scan → ScanResult 全零（feeds/comment_counts/reply_counts/dead_urls/skipped），fresh install 零异常起点
+    implements: e2e 全链首环（smoke 语义＝终验烟雾）
+    pillar: smoke
+  - id: MD-077
+    suite: e2e/lifecycle
+    name: mock_capture_cycle_writes_full_entity_tree
+    asserts: e2e 环 2——mock 腾讯响应（build_opener/urlopen 最外层缝）驱动真 QQWebClient → daemon run_once（媒体经后台池异步落盘，断言前 drain）→ 树落 2 feed/1 评论/1 回复/3 媒体 + 锁；urlnorm 归一（dis_k/dis_t 剥除）与 vecReply verbatim 双存经真 store 生效
+    implements: e2e QA 串联 + 零真实抓取门禁（mock 缝纪律）
+    pillar: smoke
+  - id: MD-078
+    suite: e2e/lifecycle
+    name: audit_tree_subprocess_green_on_captured_tree
+    asserts: e2e 环 3——子进程真 CLI 面跑 scripts/audit_tree.py --data-root <环 2 合成树> → exit 0 且 stdout 含 "RESULT" CLEAN 行与 entities 4 / media 3 汇总
+    implements: e2e QA 串联（audit 绿 = 环 2 真产物全过 Schema+写者纪律）
+    pillar: smoke
+  - id: MD-079
+    suite: e2e/lifecycle
+    name: archive_cli_packs_window_and_manifest_reconciles
+    asserts: e2e 环 4——CLI --apply 窗 (20230601, 20230602] → exit 0；解包对账 manifest=内容（计数 1/1/1、媒体 3 sha256 名实一致、zhizong 版本戳）且包成员 = 窗内树切片镜像字节等价（窗外 feed 排除）
+    implements: e2e QA 串联（消费环 2 真树）
+    pillar: smoke
+  - id: MD-080
+    suite: e2e/lifecycle
+    name: viewer_index_api_align_with_captured_tree
+    asserts: e2e 环 5——Indexer+活体 viewer 临时端口 → 树计数=SQLite 行数=API 计数（2/2/3 三级对齐）+ FeedList/FeedDetail 过编译 Schema（media.path 全路径 ㉒-c）
+    implements: e2e QA 串联（消费环 2 真树）
+    pillar: smoke
+  - id: MD-081
+    suite: e2e/lifecycle
+    name: archive_cli_dry_run_and_enumeration_match_packed_manifest
+    asserts: e2e 环 6——CLI dry-run（无 --apply）exit 0 且窗口计数逐类 = 环 4 manifest 计数 + DRY RUN 零落包；引擎枚举 list_guilds = 环 2 真树 guild、list_packages = 环 4 真包名（打包面自身 e2e 消费）
+    implements: e2e QA 串联（消费环 2 真树 + 环 4 真产物，不重造桩）· src/archive/engine.py 枚举面 + scripts/archive.py CLI
+    pillar: smoke
+  - id: MD-082
+    suite: e2e/lifecycle
+    name: launcher_supervises_three_targets_idempotent
+    asserts: e2e 环 7——活体 launcher port=0 → GET /targets 过 TargetList 三目标富对象 + scraper start 幂等（重复 200 同态）/stop 幂等（FakeProc 替身零真子进程）
+    implements: e2e QA 串联（三目标监督面）
+    pillar: smoke
+  - id: MD-089
+    suite: launcher/shell_tail
+    name: log_tail_sigint_returns_to_prompt_and_restores_handler
+    asserts: 尾随期间 SIGINT 临时换入 default_int_handler（进程级 sys.exit 处理器被屏蔽）→ KeyboardInterrupt 被 tail 捕获打 [tail stopped] 正常返回；finally 无条件恢复原处理器（getsignal 同一性断言）；SystemExit 不再穿透杀 launcher
+    implements: __main__ SIGINT→sys.exit(0) 处理器穿透 tail 的 KeyboardInterrupt 捕获（尾随期间临时换入 default_int_handler）· src/launcher/shell.py _tail_log
+    pillar: behavior
+  - id: MD-090
+    suite: smoke/shell
+    name: shell_parses_archive_verb_window_and_flags
+    asserts: archive <guild> <from> <to> [--apply][--force][--output DIR] 全形解析为 Cmd(verb=archive, noun=guild, args=[from,to,opts])（旗标布尔与 --output 取值入 opts）；参数不足/未知旗标/--output 缺值分别显式抛 MissingArgument/InvalidTarget（窗口校验归引擎单一执法源）
+    implements: shell archive 动词（打包批处理入口进监督面）· src/launcher/commands.py _parse_archive
+    pillar: smoke
+  - id: MD-091
+    suite: launcher/archive_verb
+    name: archive_verb_dispatches_engine_and_maps_exit_codes_to_messages
+    asserts: dispatcher 同步直调引擎（缝替身 plan_package/write_package）——dry-run 打计数行 + DRY RUN 零写包且默认根 data/；--apply 透传 force/output 调 write_package 回 wrote 行；空窗不落包消息；WindowError → ok=False 可读 ERROR 消息（exit 2 语义转 shell 错误，非栈崩）；未知 guild → 类型名 + 消息（exit 1 面）
+    implements: src/launcher/commands.py _handle_archive（消息面与 scripts/archive.py CLI 逐字对齐；engine 延迟导入保 launcher 基础安装）
+    pillar: behavior
+  - id: MD-092
+    suite: entity_store/paths
+    name: write_lock_creates_missing_data_root_parents
+    asserts: 锁写于父目录全链缺失的 data 根（fresh clone 首启场景）→ mkdir(parents=True) 后原子写成功、read_lock 往返等价、.tmp 无残留——scraper 首启锁写 FileNotFoundError 崩溃循环根因拔除
+    implements: src/entity_store/lock.py write_lock（目录创建归本模块，与 writer 同款约定）
+    pillar: format
+  - id: MD-093
+    suite: web_scraper/media_pool
+    name: pool_enqueue_returns_immediately_and_download_lands_async
+    asserts: fetch 缝 Event 阻塞下 attempt_entity_media（池在位）毫秒级返回且状态机未动、零落盘；放行后 drain → 媒体文件内容寻址落盘 + 块置 ok + downloaded_count=1
+    implements: 列表观测零阻塞 · src/web_scraper/media.py MediaDownloadPool/MediaDownloader.attempt_entity_media
+    pillar: behavior
+  - id: MD-094
+    suite: web_scraper/media_pool
+    name: pool_downloads_many_entities_concurrently_to_disk
+    asserts: 6 实体 × 1 媒体、池 workers=3、fetch 缝进入/退出计并发峰值>1（并发真发生）→ 全部文件字节等价落盘、状态 ok、_p 纪律经 store 锁串行保持
+    implements: src/web_scraper/media.py MediaDownloadPool（有界池复用 scraper_max_workers）+ attempt_entity_media_now 池线程执行面
+    pillar: behavior
+  - id: MD-095
+    suite: web_scraper/media_pool
+    name: pool_shutdown_drains_inflight_and_is_idempotent
+    asserts: 2 任务阻塞中 shutdown(timeout) → 报告 (0,0,2)、闭池投递 False 不 raise；放行后 media-pool-* 线程零存活（threading.enumerate 轮询）、在途任务落盘完整、.tmp 零残留；二唤幂等回放首报
+    implements: SIGTERM 停机 drain 干净（不留孤儿线程/半写文件）· src/web_scraper/media.py MediaDownloadPool.shutdown
+    pillar: behavior
+  - id: MD-096
+    suite: web_scraper/media_pool
+    name: pool_enqueue_dedups_inflight_and_terminal_media_not_refetched
+    asserts: 同实体 in-flight 二次投递 False（去重键 = guild/entity 级）；任务 retired 后可再投但 ok/dead 终态块零重复 fetch（死集先查立块即终态 + attempt 循环只碰 pending/failed——投递前去重）
+    implements: src/web_scraper/media.py enqueue in-flight 集 + attempt_entity_media_now 终态过滤
+    pillar: behavior
+  - id: MD-097
+    suite: web_scraper/media_pool
+    name: startup_scan_reports_pending_media_and_pool_seeds_backlog
+    asserts: 树含 ok/pending/failed/dead 四态媒体 → scan().pending_media 恰含 pending|failed 实体（ok-only/dead-only 不入）；enqueue_all 种子 → 存量媒体经池后台落盘、死 url 零 fetch
+    implements: 启动扫描发现的存量 pending 媒体入池 · src/entity_store/scan.py ScanResult.pending_media + src/web_scraper/__main__.py 启动种子
+    pillar: behavior
+  - id: MD-098
+    suite: web_scraper/media_pool
+    name: daemon_listing_unblocked_and_comments_follow_immediately
+    asserts: 真 Daemon（池化 downloader）+ 5 feed 列表、媒体 fetch 全程 Event 阻塞 → run_once 整周期（列表→增长评论→recheck）同步完成（gate 未放行即返回——列表/评论零等待媒体）、5 feed 全落树；放行 drain 后 5 媒体全 ok
+    implements: 评论阶段紧随列表完成（不等内联媒体下载）· src/web_scraper/daemon.py _observe_listing_page 投递化
+    pillar: behavior
+  - id: MD-100
+    suite: deepbackfill/credentials
+    name: credential_store_roundtrip_permissions_and_masking
+    asserts: conf/deepbackfill.conf.json 四键（uin/p_uin/p_skey/minted_at）原子写往返（tmp 零残留）+ 0600 + 缺文件宽容 None + 坏 JSON/缺键 fail loud；掩码面首 4 末 4 短串全掩；凭据源缺失可读错误指向扫码页 + 纯网路线 remint 无本地通道可读错误
+    implements: 纯网路线 · 凭证卫生（日志/展示零泄漏）· src/deepbackfill/credentials.py CredentialStore/CredentialManager/mask_secret
+    pillar: behavior
+  - id: MD-101
+    suite: deepbackfill/auth
+    name: bkn_djb_hash_vectors
+    asserts: bkn 已知答案向量（""=5381、"A"=177638、"@AbCdEfGh1"=1358553434）+ 44 字符域掩码上界 0x7FFFFFFF + 字节序敏感；任务给定交叉向量 1739130872 预检不可复现（任何 DJB 变体）弃用——以 §2.2 逐字节验证文档算法为准
+    implements: doc/DEEP_BACKFILL.md §2.2（bkn 自算——按 skey 算的 bkn 对 pd.qq.com 域无效）· src/deepbackfill/auth.py bkn
+    pillar: behavior
+  - id: MD-102
+    suite: deepbackfill/auth
+    name: auth_client_request_shape_headers_body_pagination
+    asserts: §2.1 逐字——URL query（bkn 自算/_t epoch ms/_v=1.0.1/client_platform=pcqqwebview 按文档值）、cookie 头 p_uin=o<uin>; uin=<uin>; p_skey、x-oidb 0x93df+13、appid 537379447、origin/referer/UA QQWebview 标记、body 九键（guild_number/count 20/from 7/get_type 1/feedAttchInfo cursor 回填/sortOption 0/双 false）；≥1s 礼貌间隔注入生效、(vec, attach, isFinish) 三元组同族签名
+    implements: doc/DEEP_BACKFILL.md §2.1/§2.3/§4（auth guild_feed_reader 请求规格 + 翻页语义 + 风控护栏）· src/deepbackfill/auth.py AuthClient
+    pillar: behavior
+  - id: MD-103
+    suite: deepbackfill/auth
+    name: auth_client_remints_once_then_retry_or_readable_error
+    asserts: 认证性失败（result≠0/403/空数据载荷）→ 凭据源 remint 恰一次（新 p_skey 进 cookie 与自算 bkn）→ 重试成功；重铸后仍败/重铸面败/传输面败分别可读 AuthError（信息不泄 p_skey）
+    implements: doc/DEEP_BACKFILL.md §2（p_skey 失效重铸即一条 curl 的服务化形态）· src/deepbackfill/auth.py AuthClient.get_feeds 重铸重试
+    pillar: behavior
+  - id: MD-104
+    suite: deepbackfill/runner
+    name: runner_full_history_pipeline_synthetic
+    asserts: 伪 auth 客户端（3 页→isFinish 干净终止 + 游标回填）+ 频道面（默认频道流已覆盖跳过、新频道 2 页 timeline 补抓）+ 合成树 → 4 feed 落实体树（captured_via=scraper——五键全同经同一写者门面）+ 增长检测（api_cc=2>本地 0）触发 noauth 评论/回复落树 + 媒体池 4 媒体内容寻址落盘 + live_stats 现算计数 + pages 聚合含频道页
+    implements: 数据面复用 web_scraper 组件（EntityStore/CommentsScraper/MediaDownloadPool/growth_targets 现成件）+ doc/DEEP_BACKFILL.md §2.3/§0（一次运行自含全管线）· src/deepbackfill/runner.py BackfillRunner
+    pillar: behavior
+  - id: MD-105
+    suite: deepbackfill/runner
+    name: runner_stall_keeps_data_and_busy_guard
+    asserts: 游标不变=异常终止（warning 不 raise——已落盘 1 feed 保真、后续页零翻）+ 媒体池投递继续；运行中 start_background=False（service 409 busy 的判定源）、join 后 running 归位
+    implements: doc/DEEP_BACKFILL.md §2.3（游标不变=异常终止语义）· src/deepbackfill/runner.py BackfillRunner.start_background/_backfill_guild
+    pillar: behavior
+  - id: MD-106
+    suite: deepbackfill/service
+    name: service_stats_reports_backfill_progress
+    asserts: 活体五端点——/stats 过 DeepbackfillStats（pages/feeds/comments/replies/media/running 进度语义）、/health 真计数、/logs?tail 尾窗、GET|PUT /config ㉖ 回显全量、PUT 含 guilds 400 ErrorEnvelope
+    implements: 契约 components/deepbackfill.yaml 五指令边（DeepbackfillStats 进度键）· src/deepbackfill/service.py DeepbackfillService
+    pillar: contract
+  - id: MD-107
+    suite: deepbackfill/service
+    name: service_trigger_busy_returns_409_envelope
+    asserts: trigger 起后台回填线程 200 DeepbackfillAction；运行中再触发 409 busy ErrorEnvelope（全史回填不可重入——与 scraper 幂等受理语义的有意分歧）；线程结束后可再触发；未配置凭据 trigger=None 面 409 not_configured 指向 shell auth
+    implements: 任务契约（运行中再触发=409 busy）· src/deepbackfill/service.py do_POST trigger 面 + runner.start_background 判定源
+    pillar: contract
+  - id: MD-115
+    suite: deepbackfill/main_boot
+    name: main_entry_boots_answers_health_and_drains_on_sigterm
+    asserts: 子进程真跑 python -m src.deepbackfill --port <free>——15s 内 /health 200 且 scanned_feeds=0；开机即死则 stdout 尾入断言信息；SIGTERM（经 /bin/kill 外部二进制，conftest 守卫豁外面）15s 内 rc=0（drain 不悬）
+    implements: 入口 wiring 必须子进程级冒烟（/health 应答 + SIGTERM 干净退出——组件级测试全绿 ≠ 装配绿）· src/deepbackfill/__main__.py main()
+    pillar: behavior
+  - id: MD-116
+    suite: deepbackfill/weblogin
+    name: weblogin_four_step_code_table_and_hash33_vectors
+    asserts: ptlogin2 四步全流（xlogin 种子/ptqrshow PNG+qrsig/ptqrlogin 码表 66·67·65·0/check_url 禁跟随取 p_skey·p_uin·uin——o 前缀剥除）+ 65 换新码（qrsig→ptqrtoken 随变）+ hash33 向量（init=0 与 init=5381==auth.bkn 同函数；任务交叉向量 1739130872 为外部实现 skey 值不可复现，循 MD-101 弃用）+ 负例（非 ptuiCB body/成功缺 check_url/未落 p_skey → 可读错误）
+    implements: 纯网页扫码登录（零部署）+ 协议参数（appid=1600001587/daid=823 实测）· src/deepbackfill/weblogin.py WebLoginClient/hash33
+    pillar: behavior
+  - id: MD-117
+    suite: deepbackfill/service
+    name: service_auth_probe_state_machine
+    asserts: 探测状态机——缺/失效凭证 → QR 会话线程起（qr_pending：PNG 缓存+qr_epoch）→ scanned（nickname 入 detail）→ 65 自动换码（epoch 前进+PNG 换新）→ success：complete → conf 0600 四键落盘 → 活测 → ok（uin 上 status）；ptqrlogin 轮询间隔恒 ≥1.5s；ensure_ready ok 直真；stop() join 干净（线程不活）
+    implements: 任务契约（凭证探测缺/失效自动起 QR 会话 + SIGTERM 可停不悬——媒体池 drain 同款模式）· src/deepbackfill/service.py AuthSessionManager
+    pillar: behavior
+  - id: MD-118
+    suite: deepbackfill/service
+    name: service_auth_endpoints_qr_png_status_page
+    asserts: 三端点活体——GET /auth/qr.png 200 image/png 真魔数字节（无会话 404 ErrorEnvelope）；GET /auth/status {state,detail,qr_epoch} qr_pending 态；GET /auth/page 内嵌 HTML 常量（img src=/auth/qr.png + fetch 轮询 + ?e= cache-bust 换图 + 等待扫码/已扫确认/成功文案）；trigger 未就绪 409 not_configured 消息指 /auth/page
+    implements: 服务直出 PNG（零终端渲染零构建）· src/deepbackfill/service.py AUTH_PAGE_HTML + do_GET /auth/* 面
+    pillar: contract
+  - id: MD-119
+    suite: launcher/auth_flow
+    name: start_deepbackfill_opens_browser_and_waits_for_login
+    asserts: start deepfill 等待流三态——boot 窗 ≤8s 首询 ok 不开浏览器立即回；qr_pending → webbrowser.open(/auth/page)（False/异常降级纯 URL 打印兜底）+ "浏览器出码手机 QQ 扫码" → 轮询至 ok（成功提示含 uin 回提示符）；状态不可达 boot 窗耗尽可读提示；Shell 钩子装配（start 成功即走等待流）
+    implements: 任务契约（shell 自动开浏览器——标准库 webbrowser + URL 兜底）· src/launcher/auth_flow.py wait_for_web_login + shell._wait_deepfill_auth
+    pillar: behavior
+  - id: MD-120
+    suite: launcher/auth_flow
+    name: auth_wait_interrupt_safe_and_offline_hint
+    asserts: 等待中 Ctrl+C → 取消消息（服务端 QR 会话保留 + /auth/page 续扫指引）+ None 回提示符（浏览器已开作续看入口）；auth 动词服务未跑 → 可读提示先 start deepfill（零等待流）
+    implements: 任务契约（Ctrl+C 安全回提示符——服务端会话保留）· src/launcher/auth_flow.py KeyboardInterrupt 面 + shell._handle_auth
+    pillar: behavior
+  - id: MD-121
+    suite: deepbackfill/weblogin
+    name: weblogin_check_sig_multi_domain_pskey_empty_must_not_win
+    asserts: check_sig 同响应多根 p_skey（真值 pd.qq.com + 他域空串）双序（真机首扫序/反序）——complete() 均拿真值；空值只补缺不覆写
+    implements: 同名多域 Set-Cookie 并存时非空恒胜（空串只补缺不覆写真值）· src/deepbackfill/weblogin.py _merge_set_cookies
+    pillar: behavior
+  - id: MD-122
+    suite: deepbackfill/weblogin
+    name: weblogin_check_sig_uin_derived_from_p_uin_when_bare_uin_absent
+    asserts: check_sig cookie 面无裸 uin（appid 1600001587 只种 p_uin/pt2gguin）——uin 从 p_uin 剥 o 前缀导出，三元组齐
+    implements: uin 导出链（uin→p_uin→pt2gguin）· src/deepbackfill/weblogin.py complete()
+    pillar: behavior
+  - id: MD-123
+    suite: deepbackfill/service
+    name: service_auth_ready_fires_on_ready_once
+    asserts: auth 到 ok → on_ready 恰一次（扫码成功路径 + 探测直通路径）；ok 后再询不重 fire（无冷却重启）
+    implements: start 之后全自动回填（trigger API 仅留手工面）· src/deepbackfill/service.py AuthSessionManager.on_ready + __main__ _auto_backfill 接线
+    pillar: behavior
+  - id: MD-124
+    suite: web_scraper/store
+    name: media_download_url_identity_refresh_and_legacy_revive
+    asserts: 原签 playUrl → 块 url 归一 + download_url 原签；下载器 fetch 收到原签地址；复观换签身份不裂（单块）且 download_url 刷新；无 download_url 键的块 dead/failed 复观复活 pending；有 download_url 键的块真死不扰
+    implements: 归一 url（urlnorm 剥 dis_k/dis_t）仅作身份键，下载走原签地址 · src/web_scraper/store.py media_block/_blocks_for + media.py fetch_url
+    pillar: behavior
+  - id: MD-125
+    suite: web_scraper/media_pool
+    name: sniff_accepts_gif_channelr_animated_stickers
+    asserts: GIF87a/GIF89a magic → sniff gif；content_name 出 .gif；契约文件名正则（含 gif）放行
+    implements: channelr psc 动图贴纸 image/gif 嗅探放行 · src/web_scraper/media.py sniff_ext + entity_store/paths._MEDIA_FILE_RE + 契约 MediaFile/MediaAsset
+    pillar: behavior
+  - id: MD-126
+    suite: deepbackfill/auth
+    name: auth_client_channel_wire_format
+    asserts: 频道 timeline commreader 路由 + query 仅 bkn（多参数即 [backend] 参数错误）+ x-oidb 仅 service_type=10 + appid 537246381 + Referer /g/{guild_id} + channelSign{guild_id,channel_id} + sortOption=0；频道清单 need_channel_list=True → data.channels；频道面认证性失败同走 remint-once
+    implements: 频道 timeline 走 commreader 服务域（GetGuildFeeds 默认流只覆盖帖子广场，抓包实证）· src/deepbackfill/auth.py get_guild_channels/get_channel_feeds
+    pillar: behavior
+  - id: MD-127
+    suite: deepbackfill/auth
+    name: auth_client_channel_list_and_remint
+    asserts: get_guild_channels 解析 data.channels；timeline result≠0 → remint-once 后成功（2 请求）；频道面与流面共享重铸语义
+    implements: 频道面凭据韧性 · src/deepbackfill/auth.py _remint_retry 复用
+    pillar: behavior
+  - id: MD-131
+    suite: launcher/client
+    name: client_verb_http_mapping_and_error_envelope
+    asserts: LauncherClient 动词→HTTP 映射（start/stop/restart/config set/shutdown）；4xx ErrorEnvelope → LauncherClientError 带 daemon message；不可达 alive()=False 不 raise
+    implements: launcher 守护/客户端分离（docker 模型：daemon 常驻、shell 瘦客户端）· src/launcher/client.py request 缝
+    pillar: behavior
+  - id: MD-132
+    suite: launcher/client
+    name: dispatcher_remote_mode_remaps_verbs
+    asserts: Dispatcher(remote=) health/start/stop/restart/config show 全走 LauncherClient（pm=None 零进程触碰；health 行=监督态+restarts+探测，monkeypatch _probe_http 零真端口）；幂等双启消息与宿主模式逐字；quit 消息 keep running；shutdown 动词 → shutdown_tree 动作
+    implements: shell→守护动词远程化 · src/launcher/commands.py Dispatcher.remote 分支 + VALID_VERBS shutdown + HELP_TEXT
+    pillar: behavior
+  - id: MD-133
+    suite: launcher/client
+    name: daemon_boots_and_two_clients_see_same_tree
+    asserts: --daemon 真子进程起动 → 探活 → 两个独立客户端看到同一 TargetList（新开的 shell 必须探测到在跑目标）；SIGTERM → rc=0 端口释放（conftest 信号守卫逃生门还原 os.kill）
+    implements: 守护进程唯一持久属主 · src/launcher/__main__.py run_daemon/_spawn_daemon/_wait_daemon
+    pillar: behavior
+  - id: MD-134
+    suite: web_scraper/gateway_alarm
+    name: client_counts_gateway_rejects
+    asserts: 200 body 内 code!=0 → gateway_rejects 逐次 +1（GetGuildFeeds/GetChannelTimelineFeeds 同缝）；安全默认值照常返回（空 vecFeed）不 raise
+    implements: 僵尸绿灯防线（client 侧）· src/web_scraper/client.py gateway_rejects 计数——noauth 网关锁（retcode 150）不再与"无新帖"不可区分
+    pillar: behavior
+  - id: MD-135
+    suite: web_scraper/gateway_alarm
+    name: daemon_escalates_gateway_rejects
+    asserts: 周期内出现网关拒绝 → ERROR 级日志（含 guild id）+ /stats 顶层与 per-guild gateway_rejects 键可见
+    implements: 僵尸绿灯防线（daemon 侧）· src/web_scraper/daemon.py _scan_guild 周期末升 ERROR + _aggregate_stats 汇总
+    pillar: behavior
+  - id: MD-136
+    suite: web_scraper/comment_pipeline
+    name: daemon_growth_phase_scrapes_all_targets
+    asserts: growth 相位经 scrape_all 并行抓取——多帖增长目标评论全数落实体、批次日志可见（并行路径不丢目标、不依赖串行次序）
+    implements: 评论管线 · daemon.py growth 循环→scrape_all(max_workers=_recheck_workers) + __main__ 轮换批 150 / 并发 8（全局 Semaphore(10) 礼貌天花板）
+    pillar: behavior
+  - id: MD-137
+    suite: meta/version
+    name: version_falls_back_to_rc_until_first_tag
+    asserts: 无 tag 环境回退 1.0.0-rc.1；describe 命中 tag 时接管并剥 v 前缀
+    implements: 演进期不建 tag，产品版本 = 1.0.0-rc.1；首个 tag v1.0.0 由作者建 · src/prometheus_version.py
+    pillar: behavior
+  - id: MD-138
+    suite: entity_store/reader
+    name: reader_body_of_full_text_projection
+    asserts: 顶层 contents.contents 非空段空格拼接（全文）；title 预览与正文独立信封；缺 contents/无文本段 → None；contents 畸形容器 ReaderError
+    implements: 腾讯双富文本信封（title=列表预览截断、顶层 contents=完整正文）· viewer content_text 投影之源
+    pillar: format
+  - id: MD-139
+    suite: viewer/live_api
+    name: live_feed_detail_carries_full_body_content_text
+    asserts: GET /api/feed/{id} 附加字段 content_text = 顶层 contents 全文（预览 title_text 之外的完整正文）；合成 FEED_A 断言逐字
+    implements: FeedDetail 附加宽容面 · MD-138 投影的 API 出口（详情页全文显示）
+    pillar: behavior
+  - id: MD-140
+    suite: launcher/health_verb
+    name: health_verb_parses_bare_and_targeted
+    asserts: health 裸 → noun=None（全目标）；health deepbackfill → noun 落位——修「多余 token 被吞、误探 scraper」
+    implements: health 目标参数化（CommandParser）
+    pillar: behavior
+  - id: MD-141
+    suite: launcher/health_verb
+    name: health_verb_rejects_invalid_and_extra_tokens
+    asserts: health bogus → InvalidTargetError；health scraper viewer → MissingArgumentError（至多一目标）
+    implements: parser 严格化——静默吞参即误报之源；status 动词退役并入 health（不留重定向提示）
+    pillar: behavior
+  - id: MD-142
+    suite: launcher/health_verb
+    name: health_bare_reports_all_three_lines_with_state
+    asserts: 裸 health 三行逐目标，每行 = 监督态 + restarts（原 status 并入）；stopped 报态零探测（probe 只落 running 两目标）；ok=被检皆 OK 才真
+    implements: 监督态/探测合并面 · state-aware 免探测——修「stopped 傻等 5s 报 TIMEOUT」
+    pillar: behavior
+  - id: MD-143
+    suite: launcher/health_verb
+    name: health_single_target_running_probe_ok
+    asserts: health scraper（config 端口键 9430 生效）→ 探测 (9430, /health) 得 200 → scraper 9430 running restarts 0 API OK 且 ok=True
+    implements: 单目标探测 · config 端口覆盖
+    pillar: behavior
+  - id: MD-144
+    suite: launcher/health_verb
+    name: health_single_target_running_probe_timeout
+    asserts: running 但探测拒绝 → viewer 9422 行尾 API TIMEOUT 且 ok=False
+    implements: 探测失败面区分于 stopped 面
+    pillar: behavior
+  - id: MD-145
+    suite: launcher/health_verb
+    name: health_single_target_stopped_no_probe
+    asserts: health deepbackfill 且 stopped → 报态行 + probe 断言零调用（pytest.fail 守卫）+ ok=False
+    implements: 免探测报态——监督态即答案
+    pillar: behavior
+  - id: MD-147
+    suite: launcher/stats_verb
+    name: stats_counts_entity_tree_and_media_bytes
+    asserts: 每 guild 计数——feeds/c_ 评论/r_ 回复/媒体文件与字节（合成树 3/2/1/2/2560）+ total 行 + 字节人性化（2.5 KB）
+    implements: stats 动词（前身 tail stats）读实体树计数——tail feeds 已删除、tail 动词退役
+    pillar: behavior
+  - id: MD-148
+    suite: launcher/stats_verb
+    name: stats_verb_empty_tree_has_readable_message
+    asserts: 空 data_root → stats 报 No archive found under <root>.
+    implements: 空树可读提示（data_root 可注入——Dispatcher 构造参）
+    pillar: behavior
+  - id: MD-149
+    suite: launcher/config_routing
+    name: config_routing_unknown_key_lists_domains
+    asserts: 未知键 → ok=False + 三域分组列出合法键（launcher/scraper/viewer 各含样本键）——修「拼错键名静默入库」
+    implements: 方案 B 键注册表——一键一主，set 前先验键
+    pillar: behavior
+  - id: MD-150
+    suite: launcher/config_routing
+    name: config_set_launcher_host_writes_atomically
+    asserts: 宿主模式 launcher 键 → 原子写 conf 文件（他键保留）+ 消息含 [live] 生效提示（max_restarts）
+    implements: launcher 域写路径（单写者守则的宿主侧）
+    pillar: behavior
+  - id: MD-151
+    suite: launcher/config_routing
+    name: config_set_launcher_remote_uses_daemon_writer
+    asserts: 远程模式 launcher 键 → remote.config_set 单写者调用（盘文件不动）+ [next viewer start] 提示
+    implements: 守护单写者——客户端不直写 launcher.conf.json
+    pillar: behavior
+  - id: MD-152
+    suite: launcher/config_routing
+    name: config_set_scraper_merges_disk_and_live_syncs_when_running
+    asserts: scraper 键 → prometheus.conf.json 原子合并（_comment/他键保留）+ 运行中 live 回显同步 + [restart scraper] 提示（组件启动期定型——live PUT 只对齐回显）
+    implements: scraper 域路由——修「采集参数 shell 够不着」
+    pillar: behavior
+  - id: MD-153
+    suite: launcher/config_routing
+    name: config_set_scraper_stopped_skips_live_sync
+    asserts: scraper stopped → 零 live 调用（守卫断言）+ 消息无 live 字样
+    implements: 状态感知的 live 同步——stopped 免探测同款
+    pillar: behavior
+  - id: MD-154
+    suite: launcher/config_routing
+    name: config_set_viewer_writes_viewer_conf
+    asserts: viewer 键（db_path/poll_interval/page_size）→ viewer.conf.json 原子合并（他键保留）
+    implements: viewer 域路由（port 例外归 launcher——spawn --port 覆盖）
+    pillar: behavior
+  - id: MD-155
+    suite: launcher/config_routing
+    name: config_show_groups_masks_and_marks_defaults
+    asserts: 分组视图五段（launcher/scraper/viewer/guilds 只读/凭证掩码首4末4）；缺席 launcher 键标 (default)；p_skey 全串绝不出现；scraper stopped → live view unavailable
+    implements: config show 全景面——修「只见 launcher 三键的假全局」
+    pillar: behavior
+  - id: MD-156
+    suite: launcher/config_routing
+    name: config_show_reports_live_drift
+    asserts: scraper running + live GET 与盘值不一致 → 逐键 live drift 行（disk X → live Y）
+    implements: 盘/live 漂移可见性（live PUT 无行为效力的诚实面）
+    pillar: behavior

@@ -1,0 +1,18 @@
+SchemaVersion: 1
+Type: structure
+Name: ScraperConfig
+Description: >-
+  GET/PUT /config 请求/响应体（scraper；㉖ 同 launcher 形态：PUT 回显、双向挂载）。薄钉 guilds。
+Location: urn:prometheus:type:ScraperConfig
+Definition:
+  Form: record
+  Table:
+    - Field: guilds
+      Type: array<object>
+      Required: true
+      Description: 监督的频道清单（多频道配置面）；其余配置键不入钉扎面（additionalProperties 宽容——配置面演化快，薄钉即可）。
+      Fields:
+        - Field: guild_id
+          Type: GuildId
+          Required: true
+          Description: 频道 ID（数据目录扫描来源；附加字段如 feed 计数不入钉扎面，additionalProperties 宽容）。

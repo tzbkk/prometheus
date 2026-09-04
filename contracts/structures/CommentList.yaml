@@ -1,0 +1,25 @@
+SchemaVersion: 1
+Type: structure
+Name: CommentList
+Description: >-
+  viewer GET /api/feed/{feed_id}/comments 响应。{feed_id} 参数之家。条目内联
+  media 数组不入钉扎面；文本/作者投影归读取库。
+Location: urn:prometheus:type:CommentList
+Parameters:
+  feed_id: {Type: FeedId}
+Definition:
+  Form: record
+  Table:
+    - Field: comments
+      Type: array<object>
+      Required: true
+      Description: 评论条目数组。
+      Fields:
+        - Field: id
+          Type: CommentId
+          Required: true
+          Description: 评论 ID（c_ 前缀）。
+        - Field: feed_id
+          Type: FeedId
+          Required: true
+          Description: 所属帖子。

@@ -1,0 +1,34 @@
+SchemaVersion: 1
+Type: structure
+Name: ProcessLock
+Description: >-
+  瞬态进程锁：全系统唯一全局文件，存在即活动（transient 语义）。全钉 5 字段：pid/dirty/cycle/ts 四项为实测格式（web_scraper/lock.py，
+  JSON indent=2），bottomReached 承载崩溃恢复语义
+  （"是否已翻到历史底部"标志，深回填断点续跑依赖）。写者纪律：原子写
+  （.tmp + os.replace）；daemon 启动时 stale pid 检测 + dirty 位处置属 scraper
+  行为规格（tests/entity_store/test_lock），不在本契约。
+Location: file:data/prometheus.lock
+Lifecycle: transient
+Definition:
+  Form: record
+  Table:
+    - Field: pid
+      Type: integer
+      Required: true
+      Description: 持锁进程 PID（unix）。崩溃恢复判据：pid 不存活 = stale 锁。
+    - Field: dirty
+      Type: boolean
+      Required: true
+      Description: 脏位——本周期是否发生过未收尾的写入（崩溃恢复时决定是否触发一致性校验）。
+    - Field: cycle
+      Type: integer
+      Required: true
+      Description: 守护周期计数（第几轮扫描），单调递增。
+    - Field: ts
+      Type: integer
+      Required: true
+      Description: 锁最近更新时刻（unix 秒，非毫秒——实测如此，保持原体）。
+    - Field: bottomReached
+      Type: boolean
+      Required: true
+      Description: 历史底部是否已到达——深回填断点续跑的恢复标志。

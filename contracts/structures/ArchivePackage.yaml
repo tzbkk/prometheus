@@ -1,0 +1,24 @@
+SchemaVersion: 1
+Type: structure
+Name: ArchivePackage
+Description: >-
+  归档包（tar.zst，自包含：镜像实体树布局 + manifest.json + 媒体）。
+  打包窗口编码进文件名，包自描述、免读 manifest 即可定窗口。全量包 =
+  <创建时刻>_full；增量包 = <创建时刻>_from_<起始日>_to_<终止日>；创建时刻 =
+  打包作业时刻（UTC，YYYYMMDDTHHMMSSZ），日期段 = 窗口边界（UTC，YYYYMMDD）。
+  窗口语义：快照语义——三类实体各自按自身 createTime 判窗，
+  createTime ∈ (from, to]；同内容媒体跨窗重复（自包含）。越界/倒序拒绝
+  （exit 2）与对账失败（exit 3）是 archive 组件行为规格，不在
+  命名契约内。
+  Lifecycle: generated——工具产物，磁盘缺失不告警。
+  文件名主干与 PackageName 标量同grammar（productions 为执法面，
+  两者恒一致——修改必须联动）。
+Location: file:archives/{guild}/packages/{package}.tar.zst
+Parameters:
+  guild: {Type: GuildId}
+  package: {Type: PackageName}
+Lifecycle: generated
+Definition:
+  Form: grammar
+  Productions: |
+    package ::= /^[0-9]{8}T[0-9]{6}Z(_full|_from_[0-9]{8}_to_[0-9]{8})$/

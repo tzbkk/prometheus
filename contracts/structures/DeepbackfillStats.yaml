@@ -1,0 +1,35 @@
+SchemaVersion: 1
+Type: structure
+Name: DeepbackfillStats
+Description: >-
+  GET /stats 响应（deepbackfill）。四类实体累计计数（快照语义，重启归零与否不钉）
+  + 全史回填进度键（pages 已翻页数 / running 回填线程运行态——孪生面
+  在五端点家族，进度键是获取器差异（isFinish 全史 vs 5.5 月窗）的自然推论）。
+Location: urn:prometheus:type:DeepbackfillStats
+Definition:
+  Form: record
+  Table:
+    - Field: feeds
+      Type: integer
+      Required: true
+      Description: feed 实体计数。
+    - Field: comments
+      Type: integer
+      Required: true
+      Description: 评论实体计数。
+    - Field: replies
+      Type: integer
+      Required: true
+      Description: 回复实体计数。
+    - Field: media
+      Type: integer
+      Required: true
+      Description: 媒体文件计数。
+    - Field: pages
+      Type: integer
+      Required: true
+      Description: auth 通道已翻页数（全史回填进度——isFinish 终止前的页计数）。
+    - Field: running
+      Type: boolean
+      Required: true
+      Description: 回填线程运行态（trigger 起后台线程置位，isFinish/停止后归位）。

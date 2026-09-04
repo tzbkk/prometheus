@@ -1,0 +1,19 @@
+SchemaVersion: 1
+Type: structure
+Name: MediaFile
+Description: >-
+  媒体文件名，单一内容寻址方案（，2026-08-27 覆盖 §4.3"保持现名"）：
+  <文件内容 sha256 完整摘要>.<真实扩展名>。
+  名字 = f(内容)，后果：
+  ① 迁移免映射表——重哈希即得名，天然幂等；
+  ② 同内容跨实体自动去重——重复内容坍缩为单文件，
+  _p.media[].file 多条目可指向同一文件；
+  ③ 与腾讯命名体系彻底解耦——实体树自描述，孤儿检测平凡。
+  扩展名取文件真实格式（magic sniff），不转码不改写，归档数据永不变形；
+  集合按实证 {jpg, png, mp4, gif}（gif = channelr psc 动图贴纸；png 实测 3 个且被引用，），
+  新格式出现 = 契约拒绝 = 先修契约再收数据（fail loud）。
+Location: urn:prometheus:type:MediaFile
+Definition:
+  Form: scalar
+  Base: string
+  Pattern: '^[0-9a-f]{64}\.(jpg|png|mp4|gif)$'

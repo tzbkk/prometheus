@@ -1,0 +1,13 @@
+SchemaVersion: 1
+Type: structure
+Name: Shard
+Description: >-
+  分片目录名的 hex 段，256 桶/前缀。派生规则（写者纪律，契约只钉形状）：
+  feeds = sha256(feed_id)[:2]、comments/replies = sha256(comment_id)[:2]、
+  media = 文件名前 2 位（文件名即内容 sha256 摘要，分片=摘要[:2]，
+  无需二次哈希）。sha256 输出恒为小写 hex，故本 Pattern 天然排除大写与非 hex 字符。
+Location: urn:prometheus:type:Shard
+Definition:
+  Form: scalar
+  Base: string
+  Pattern: '^[0-9a-f]{2}$'

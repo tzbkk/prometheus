@@ -1,0 +1,12 @@
+SchemaVersion: 1
+Type: structure
+Name: CommentId
+Description: >-
+  评论（comment）ID：c_ 前缀 + 腾讯字母数字后缀。实测（与回复合计 67,422 条）
+  后缀恒 38 位 [0-9A-Za-z]，零字符集违规；后缀长度不钉，理由同 FeedId。
+  评论与回复是两个结构、两个标量，路径以字面 c_ 前缀分治。
+Location: urn:prometheus:type:CommentId
+Definition:
+  Form: scalar
+  Base: string
+  Pattern: '^c_[0-9A-Za-z]+$'

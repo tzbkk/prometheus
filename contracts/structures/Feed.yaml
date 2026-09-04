@@ -1,0 +1,98 @@
+SchemaVersion: 1
+Type: structure
+Name: Feed
+Description: >-
+  帖子实体：腾讯 feed 元素逐字原体（顶层 80+ 字段）+ _p 命名空间（仅不可再生信息）。
+  范式 B：顶层一字不动——additionalProperties 恒 true，未钉字段不判非法；
+  契约只钉 D1 薄钉集（id / createTime / channelInfo.sign.guild_id）与 _p 全钉。
+  去重 = 文件存在性（文件名即 feed_id）；可变性 = 整文件重写：重拉时顶层逐字替换、
+  first_seen 保留、last_seen 更新、media 只填不删。
+Location: file:data/{guild}/feeds/B_{feed_shard}/{feed_id}.json
+Parameters:
+  guild: {Type: GuildId}
+  feed_shard: {Type: Shard}
+  feed_id: {Type: FeedId}
+Lifecycle: rewrite-in-place
+Definition:
+  Form: record
+  Table:
+    - Field: id
+      Type: FeedId
+      Required: true
+      Description: 腾讯帖子 ID（B_ 前缀），与文件名 {feed_id} 参数一致；文件存在性即去重键。
+    - Field: createTime
+      Type: string
+      Required: true
+      Description: 腾讯原体创建时间，十进制字符串秒（实证 9,710 条全量 string，）；int 转换由读取库 created_at_of 在内存完成，契约钉原体形态不动。
+    - Field: channelInfo
+      Type: object
+      Required: true
+      Description: 频道归属子树（腾讯原体，仅展开钉 sign.guild_id 一条路径，其余子键不钉）。
+      Fields:
+        - Field: sign
+          Type: object
+          Required: true
+          Description: 频道签名对象（被钉路径的中间层；实证 9,710 条 100% 存在）。
+          Fields:
+            - Field: guild_id
+              Type: GuildId
+              Required: true
+              Description: 所属频道 ID——多频道树的定根字段，与 Location 参数 {guild} 一致（实证 100% 存在，字符串形态）。
+    - Field: _p
+      Type: object
+      Required: true
+      Description: prometheus 捕获元数据命名空间（恒为 JSON 末键——键序是写者纪律，契约不可表达）。观测时钟与媒体状态机的唯一居所。
+      Fields:
+        - Field: captured_via
+          Type: string
+          Required: true
+          Description: 捕获通道溯源（scraper / deepbackfill 等）。值域未钉：写者全控字段，值收敛后再钉枚举（窄起步原则）。
+        - Field: first_seen
+          Type: integer
+          Required: true
+          Description: 本实体首次落盘时刻（unix 毫秒，观测时钟）——重拉永不改写。
+        - Field: last_seen
+          Type: integer
+          Required: true
+          Description: 本实体最近一次重拉确认时刻（unix 毫秒）——每次重写必更新。
+        - Field: media
+          Type: array<object>
+          Required: true
+          Description: 媒体引用清单（空数组 = 无媒体）。条目 9 字段全钉（ + download_url）；同 url 条目跨实体可指向同一文件（内容寻址去重，）；死 URL 集命中条目直接标 dead 不再尝试。
+          Fields:
+            - Field: url
+              Type: string
+              Required: true
+              Description: 归一 URL（剥 dis_k/dis_t 易变签名参）——媒体唯一身份键、死 URL 集的键、去重键。
+            - Field: download_url
+              Type: string?
+              Required: false
+              Description: 最近观测的原签地址（含 dis_k/dis_t）——下载器实际取的 URL（签名是下载必需凭证，剥离即 404）。复观刷新；遗留块缺省（读取回退 url）；无签名参数媒体与 url 同值。
+            - Field: file
+              Type: MediaFile?
+              Required: true
+              Description: 内容寻址文件名（sha256 摘要.ext，）；null = 未下载（pending 态）。可空语法（，zhizong 批次支持）。
+            - Field: type
+              Type: string
+              Required: true
+              Description: 媒体类型（腾讯语义，惯例值 image|video|sticker|audio）。腾讯值域不钉枚举——非我方状态机，值域归腾讯管；非法值的代价由读取库投影承担，不由契约承担。
+            - Field: width
+              Type: integer?
+              Required: true
+              Description: 像素宽；null = 未测得（下载后 sniff 回填）。
+            - Field: height
+              Type: integer?
+              Required: true
+              Description: 像素高；null = 未测得。
+            - Field: status
+              Type: pending|ok|failed|dead
+              Required: true
+              Description: 下载状态机：pending→ok/failed；failed 且 retries≥3 → dead。枚举语法——"deas"之类手误将被契约直接拒绝。
+            - Field: retries
+              Type: integer
+              Required: true
+              Description: 失败重试计数（晋升 dead 的判据；backfill 回填）。
+            - Field: last_attempt_ts
+              Type: integer?
+              Required: true
+              Description: 最近下载尝试时刻（unix 毫秒）；null = 从未尝试。backfill 回填，不动 first_seen/last_seen（两本时钟）。

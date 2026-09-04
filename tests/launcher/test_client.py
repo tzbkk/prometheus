@@ -12,6 +12,7 @@ import os
 import signal
 import socket
 import subprocess
+import sys
 import time
 
 import pytest
@@ -128,7 +129,7 @@ def test_daemon_boots_and_two_clients_see_same_tree(monkeypatch):
     port = s.getsockname()[1]
     s.close()
     p = subprocess.Popen(
-        [".venv/bin/python", "-m", "src.launcher", "--daemon",
+        [sys.executable, "-m", "src.launcher", "--daemon",
          "--port", str(port)],
         cwd=REPO_ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

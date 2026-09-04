@@ -101,9 +101,11 @@ jobs:
         run: |
           curl -s 'http://127.0.0.1:9422/api/feeds?size=5' | python -c "
           import json, sys
-          feeds = json.load(sys.stdin)
-          assert isinstance(feeds, list), f'expected list, got {type(feeds)}'
-          assert len(feeds) > 0, 'no feeds returned'
+          body = json.load(sys.stdin)
+          assert isinstance(body, dict), f'expected FeedList envelope, got {type(body)}'
+          feeds = body['feeds']
+          assert isinstance(feeds, list) and feeds, 'no feeds in envelope'
+          assert all('id' in f for f in feeds), 'feed rows missing id'
           print(f'GET /api/feeds?size=5 -> {len(feeds)} feeds')
           "
 
@@ -120,9 +122,11 @@ jobs:
         run: |
           curl -s 'http://127.0.0.1:9422/api/search?q=高木' | python -c "
           import json, sys
-          data = json.load(sys.stdin)
-          count = len(data) if isinstance(data, list) else 'dict'
-          print(f'GET /api/search?q=高木 -> {count} results')
+          body = json.load(sys.stdin)
+          assert isinstance(body, dict), f'expected FeedList envelope, got {type(body)}'
+          results = body['feeds']
+          assert isinstance(results, list), 'search feeds not a list'
+          print(f'GET /api/search?q=高木 -> {len(results)} results')
           "
 
       - name: Stop viewer

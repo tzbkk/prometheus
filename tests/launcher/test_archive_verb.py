@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from src.archive.engine import WindowError
-from src.launcher.commands import Cmd, Dispatcher
+from src.launcher.commands import Cmd, CommandParser, Dispatcher
 
 
 def test_archive_verb_dispatches_engine_and_maps_exit_codes_to_messages(
@@ -97,3 +97,74 @@ def test_archive_verb_dispatches_engine_and_maps_exit_codes_to_messages(
     res = dispatcher.dispatch(_cmd("20220101", "20260830"))
     assert res["ok"] is False
     assert res["message"] == "ERROR: FileNotFoundError: guild directory not found: data/999"
+
+
+def test_archive_bare_lists_guild_data_spans(tmp_path):
+    """MD-158：裸 archive / archive <guild> / 未知 guild。
+
+    回答「有哪些时间可以备份」：每 guild 计数 + createTime 跨度
+    （YYYYMMDD 同窗参格式）+ 用法两行；guild-only 过滤单行；
+    未知 guild 报 known 列表。
+    """
+    import json as _json
+    import os as _os
+
+    guild = "1000000000000001"
+    other = "1000000000000002"
+    for gid, name, ts in ((guild, "B_x1", 1672531200),
+                          (guild, "B_x2", 1735689600),
+                          (other, "B_x3", 1704067200)):
+        shard = _os.path.join(str(tmp_path), gid, "feeds", name[-2:])
+        _os.makedirs(shard, exist_ok=True)
+        with open(_os.path.join(shard, name + ".json"), "w",
+                  encoding="utf-8") as fh:
+            _json.dump({"id": name, "createTime": str(ts)}, fh)
+
+    d = Dispatcher(pm=SimpleNamespace(), config={}, config_path=None,
+                   data_root=str(tmp_path))
+    parser = CommandParser()
+
+    res = d.dispatch(parser.parse("archive"))
+    assert res["ok"] is True
+    assert "1000000000000001  2 feeds · 0 comments · 0 replies ·" in res["message"]
+    assert "· span 20230101..20250101" in res["message"]
+    assert "1000000000000002  1 feeds" in res["message"]
+    assert "· span 20240101..20240101" in res["message"]
+    assert "usage: archive <guild> <from> <to> [--apply]" in res["message"]
+    assert "window (from, to] on entity createTime" in res["message"]
+
+    res = d.dispatch(parser.parse("archive " + other))
+    assert res["ok"] is True
+    assert other in res["message"] and guild not in res["message"]
+
+    res = d.dispatch(parser.parse("archive 999"))
+    assert res["ok"] is False
+    assert "known guilds: 1000000000000001, 1000000000000002" in res["message"]
+
+
+def test_archive_empty_window_appends_data_span(tmp_path, monkeypatch):
+    """MD-159：空窗消息尾随实际数据跨度——一步自纠。"""
+    import json as _json
+    import os as _os
+
+    guild = "1000000000000001"
+    for name, ts in (("B_x1", 1672531200), ("B_x2", 1735689600)):
+        shard = _os.path.join(str(tmp_path), guild, "feeds", name[-2:])
+        _os.makedirs(shard, exist_ok=True)
+        with open(_os.path.join(shard, name + ".json"), "w",
+                  encoding="utf-8") as fh:
+            _json.dump({"id": name, "createTime": str(ts)}, fh)
+
+    monkeypatch.setattr(
+        "src.archive.engine.plan_package",
+        lambda *a, **k: SimpleNamespace(
+            is_empty=True, counts={"feeds": 0, "comments": 0, "replies": 0},
+            media=()),
+    )
+    d = Dispatcher(pm=SimpleNamespace(), config={}, config_path=None,
+                   data_root=str(tmp_path))
+    res = d.dispatch(CommandParser().parse(
+        "archive {0} 20240101 20240102".format(guild)))
+    assert res["ok"] is True
+    assert "no data in window (20240101, 20240102] for guild {0}"         " — nothing to archive.  data spans 20230101..20250101".format(
+            guild) in res["message"]

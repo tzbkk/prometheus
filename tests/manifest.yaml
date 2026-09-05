@@ -793,3 +793,21 @@ mandates:
     asserts: scraper running + live GET 与盘值不一致 → 逐键 live drift 行（disk X → live Y）
     implements: 盘/live 漂移可见性（live PUT 无行为效力的诚实面）
     pillar: behavior
+  - id: MD-157
+    suite: launcher/stats_verb
+    name: stats_reports_data_spans_and_archive_usage
+    asserts: stats 行附 createTime 跨度（YYYYMMDD 与窗参同格式）+ 尾随 archive 用法行（窗语义 (from, to] UTC）
+    implements: archive_tree_stats 采集每实体 createTime min/max——回答有哪些时间可备份
+    pillar: behavior
+  - id: MD-158
+    suite: launcher/archive_verb
+    name: archive_bare_lists_guild_data_spans
+    asserts: 裸 archive 全景（每 guild 计数+跨度+用法两行）+ archive <guild> 过滤单 guild + 未知 guild 报 known 列表
+    implements: 可备份范围发现面——裸动词全景惯例（同 health/config show）
+    pillar: behavior
+  - id: MD-159
+    suite: launcher/archive_verb
+    name: archive_empty_window_appends_data_span
+    asserts: no data in window 消息尾随实际数据跨度（data spans X..Y）——一步自纠
+    implements: 空窗 miss 的自纠提示（跨度与窗参同格式可直接粘贴）
+    pillar: behavior

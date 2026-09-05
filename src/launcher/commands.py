@@ -19,6 +19,7 @@ import tempfile
 import os
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 HELP_TEXT = """Available commands:
@@ -28,12 +29,12 @@ HELP_TEXT = """Available commands:
   logs <scraper|deepbackfill|viewer>     Tail process log (Ctrl+C to stop)
   auth                    Web QR login for deepbackfill (service must be running)
   archive <guild> <from> <to> [--apply] [--force] [--output DIR]
-                          Package a time window (dry-run by default; dates are UTC YYYYMMDD)
+                          Package a time window (bare archive lists data spans; dry-run default; UTC YYYYMMDD)
   config show             Grouped view: launcher / scraper / viewer / guilds / credentials
   config set <key> <val>  Set a registered key — routed to its owner file
                           (unknown key lists valid keys)
   health [target]         Supervision state + API probe per target (bare = all three)
-  stats                   Per-guild archive counts and media size (entity tree)
+  stats                   Per-guild counts, media size and data spans (entity tree)
   help                    Show this help
   quit                    Close this shell (targets keep running — daemon supervises)
   shutdown                Stop daemon and all targets (full tree down)
@@ -211,6 +212,14 @@ class CommandParser:
         窗参格式/日历/倒序校验不做在解析层——引擎是单一执法源
         （WindowError 的消息即 shell 错误面）。
         """
+        if len(tokens) == 1:
+            return Cmd(verb="archive", noun=None,
+                       args=[None, None,
+                             {"apply": False, "force": False, "output": None}])
+        if len(tokens) == 2:
+            return Cmd(verb="archive", noun=tokens[1],
+                       args=[None, None,
+                             {"apply": False, "force": False, "output": None}])
         if len(tokens) < 4:
             raise MissingArgumentError(
                 "'archive' requires <guild> <from> <to>"
@@ -258,17 +267,65 @@ def _iter_guild_dirs(data_root):
             yield root, name
 
 
+def _entity_create_time(path):
+    """实体 createTime（QQ 十进制秒串）→ int 秒；不可读/畸形 → None。
+
+    信息面容忍（全景缺一格不崩）；engine 侧对账链依旧严格
+    （resolve → load_entity → createTime fail loud）。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = json.load(fh).get("createTime")
+        return int(str(raw))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _widen_span(span, path):
+    """以 path 实体的 createTime 拓宽 (earliest, latest) 秒对。"""
+    ts = _entity_create_time(path)
+    if ts is None:
+        return span
+    lo, hi = span
+    if lo is None or ts < lo:
+        lo = ts
+    if hi is None or ts > hi:
+        hi = ts
+    return (lo, hi)
+
+
+def _ymd_utc(ts):
+    """int 秒 → UTC YYYYMMDD——与 archive 窗参同格式，可直接粘贴回命令。"""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y%m%d")
+
+
+def _guild_stat_line(guild, e):
+    """一行 guild 全景：计数 + 体积 + createTime 跨度（有则附）。"""
+    span = ""
+    if e.get("earliest_ts") is not None:
+        span = " · span {0}..{1}".format(
+            _ymd_utc(e["earliest_ts"]), _ymd_utc(e["latest_ts"]))
+    return "{0}  {1} feeds · {2} comments · {3} replies · {4} media ({5}){6}".format(
+        guild, e["feeds"], e["comments"], e["replies"],
+        e["media_files"], _format_bytes(e["media_bytes"]), span)
+
+
 def archive_tree_stats(data_root):
-    """每 guild 实体树计数：feeds / c_ 评论 / r_ 回复 / 媒体文件与字节。"""
+    """每 guild 实体树计数 + createTime 跨度（feeds/c_/r_/媒体与字节）。"""
     stats = {}
     for guild_root, guild in _iter_guild_dirs(data_root):
         entry = {"feeds": 0, "comments": 0, "replies": 0,
                  "media_files": 0, "media_bytes": 0}
+        span = (None, None)
         for fname in os.listdir(os.path.join(guild_root, "feeds")):
             shard_dir = os.path.join(guild_root, "feeds", fname)
             if os.path.isdir(shard_dir):
-                entry["feeds"] += sum(
-                    1 for f in os.listdir(shard_dir) if f.endswith(".json"))
+                for f in os.listdir(shard_dir):
+                    if not f.endswith(".json"):
+                        continue
+                    entry["feeds"] += 1
+                    span = _widen_span(
+                        span, os.path.join(shard_dir, f))
         comments_root = os.path.join(guild_root, "comments")
         if os.path.isdir(comments_root):
             for shard in os.listdir(comments_root):
@@ -278,8 +335,13 @@ def archive_tree_stats(data_root):
                 if not os.path.isdir(shard_dir):
                     continue
                 key = "comments" if shard.startswith("c_") else "replies"
-                entry[key] += sum(
-                    1 for f in os.listdir(shard_dir) if f.endswith(".json"))
+                for f in os.listdir(shard_dir):
+                    if not f.endswith(".json"):
+                        continue
+                    entry[key] += 1
+                    span = _widen_span(
+                        span, os.path.join(shard_dir, f))
+        entry["earliest_ts"], entry["latest_ts"] = span
         media_root = os.path.join(guild_root, "media")
         if os.path.isdir(media_root):
             for shard in os.listdir(media_root):
@@ -435,11 +497,7 @@ class Dispatcher:
                   "media_files": 0, "media_bytes": 0}
         for guild in sorted(stats):
             e = stats[guild]
-            lines.append(
-                "{0}  {1} feeds · {2} comments · {3} replies ·"
-                " {4} media ({5})".format(
-                    guild, e["feeds"], e["comments"], e["replies"],
-                    e["media_files"], _format_bytes(e["media_bytes"])))
+            lines.append(_guild_stat_line(guild, e))
             for k in totals:
                 totals[k] += e[k]
         lines.append("total  {0} feeds · {1} comments · {2} replies ·"
@@ -447,6 +505,9 @@ class Dispatcher:
                          totals["feeds"], totals["comments"],
                          totals["replies"], totals["media_files"],
                          _format_bytes(totals["media_bytes"])))
+        lines.append("usage: archive <guild> <from> <to> [--apply]"
+                     " — window (from, to] on entity createTime"
+                     " (UTC YYYYMMDD)")
         return {"ok": True, "message": "\n".join(lines), "data": stats}
 
     @staticmethod
@@ -673,6 +734,34 @@ class Dispatcher:
                     pass
             raise
 
+    def _archive_panorama(self, guild):
+        """裸 archive / archive <guild>——可备份范围全景 + 用法。
+
+        回答「有哪些时间可以备份」：每 guild createTime 跨度 + 计数，
+        跨度格式与窗参同款 YYYYMMDD，看一眼即可直接拼命令。
+        """
+        stats = archive_tree_stats(self.data_root)
+        if not stats:
+            return {"ok": True,
+                    "message": "No archive found under {0}.".format(
+                        self.data_root),
+                    "data": {}}
+        if guild is not None and guild not in stats:
+            return {"ok": False,
+                    "message": "no data for guild {0} under {1}"
+                               " — known guilds: {2}".format(
+                                   guild, self.data_root,
+                                   ", ".join(sorted(stats))),
+                    "data": {}}
+        lines = [_guild_stat_line(g, stats[g])
+                 for g in sorted(stats)
+                 if guild is None or g == guild]
+        lines.append("usage: archive <guild> <from> <to> [--apply]"
+                     " [--force] [--output DIR]")
+        lines.append("window (from, to] on entity createTime"
+                     " — dates UTC YYYYMMDD")
+        return {"ok": True, "message": "\n".join(lines), "data": stats}
+
     def _handle_archive(self, cmd):
         """同步直调打包引擎（批处理——engine 跑多久 shell 就等多久）。
 
@@ -684,6 +773,8 @@ class Dispatcher:
         """
         guild = cmd.noun
         from_ymd, to_ymd, opts = cmd.args
+        if from_ymd is None:
+            return self._archive_panorama(guild)
         try:
             from src.archive.engine import (
                 ReconciliationError,
@@ -697,12 +788,18 @@ class Dispatcher:
                                " (pip install -e \".[contracts]\"): {0}".format(exc),
                     "data": {}}
         try:
-            plan = plan_package(_ARCHIVE_DATA_ROOT, guild, from_ymd, to_ymd)
+            plan = plan_package(self.data_root, guild, from_ymd, to_ymd)
             if plan.is_empty:
+                span_note = ""
+                st = archive_tree_stats(self.data_root).get(guild)
+                if st and st.get("earliest_ts") is not None:
+                    span_note = "  data spans {0}..{1}".format(
+                        _ymd_utc(st["earliest_ts"]),
+                        _ymd_utc(st["latest_ts"]))
                 return {"ok": True,
                         "message": "no data in window ({0}, {1}] for guild {2}"
-                                   " — nothing to archive.".format(
-                                       from_ymd, to_ymd, guild),
+                                   " — nothing to archive.{3}".format(
+                                       from_ymd, to_ymd, guild, span_note),
                         "data": {}}
             counts = plan.counts
             header = "window ({0}, {1}] guild {2}: feeds={3} comments={4}" \

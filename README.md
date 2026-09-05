@@ -41,13 +41,14 @@ bash scripts/start_launcher.sh
 #    logs <target>           实时查看日志（Ctrl+C 停止尾随——回提示符，不退 shell）
 #    auth                    deepbackfill 网页扫码登录（自动开浏览器；服务需在跑——
 #                           未跑时提示先 start deepbackfill）
-#    archive <guild> <from> <to> [--apply] [--force] [--output DIR]
+#    archive [guild] <from> <to> [--apply] [--force] [--output DIR]
 #                           时间窗打包（默认 dry-run 打计数；同步直调引擎；
 #                           guild 可 Tab 补全自 data/；日期 UTC YYYYMMDD）
+#                           裸 archive = 各 guild 数据跨度全景——可备份的时间范围一目了然
 #    config show             分组全景（launcher/scraper/viewer/guilds/凭证掩码；盘-live 漂移可见）
 #    config set <key> <val>  键注册表路由（launcher→守护单写者；scraper/viewer→各自 conf
 #                           原子写+运行中 live 回显同步；未知键列出全部合法键与生效时机）
-#    stats                   每 guild 归档计数（feeds/评论/回复/媒体与体积）
+#    stats                   每 guild 归档计数与 createTime 跨度（feeds/评论/回复/媒体与体积）
 #    health [target]         监督态 + API 探测逐行（state、restarts、运行中才探端口；
 #                           原 status 已并入——裸 health = 三目标，可单探）
 #    help / clear            帮助 / 清屏

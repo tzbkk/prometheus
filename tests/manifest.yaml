@@ -811,3 +811,15 @@ mandates:
     asserts: no data in window 消息尾随实际数据跨度（data spans X..Y）——一步自纠
     implements: 空窗 miss 的自纠提示（跨度与窗参同格式可直接粘贴）
     pillar: behavior
+  - id: MD-160
+    suite: launcher/stats_verb
+    name: stats_lists_month_day_availability
+    asserts: 逐月计数行 + 确切可用日区间编码（days 01-02 05）+ 空洞月缺席——span 只是模糊范围月桶才是窗参全集
+    implements: _see_entity 逐月直方图 + _day_ranges 区间压缩——可给定时间戳的枚举面
+    pillar: behavior
+  - id: MD-161
+    suite: launcher/archive_verb
+    name: archive_panorama_lists_month_day_availability
+    asserts: archive 全景逐月可用日与 stats 同形——备份发现面一致
+    implements: 全景/ stats 共享 _month_line 格式器
+    pillar: behavior

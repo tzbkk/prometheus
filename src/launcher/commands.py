@@ -34,7 +34,7 @@ HELP_TEXT = """Available commands:
   config set <key> <val>  Set a registered key — routed to its owner file
                           (unknown key lists valid keys)
   health [target]         Supervision state + API probe per target (bare = all three)
-  stats                   Per-guild counts, media size and data spans (entity tree)
+  stats                   Per-guild counts with month/day availability (entity tree)
   help                    Show this help
   quit                    Close this shell (targets keep running — daemon supervises)
   shutdown                Stop daemon and all targets (full tree down)
@@ -281,8 +281,13 @@ def _entity_create_time(path):
         return None
 
 
-def _widen_span(span, path):
-    """以 path 实体的 createTime 拓宽 (earliest, latest) 秒对。"""
+def _see_entity(entry, span, path, kind):
+    """以 path 实体的 createTime 拓宽 (earliest, latest) 秒对并入逐月直方图。
+
+    月桶 = {feeds/comments/replies 计数, days 集合}——回答「哪些
+    YYYYMMDD 可以当窗参」：span 只是模糊范围，月桶+days 才是确切
+    可用日（空洞月/空洞日一目了然）。
+    """
     ts = _entity_create_time(path)
     if ts is None:
         return span
@@ -291,12 +296,44 @@ def _widen_span(span, path):
         lo = ts
     if hi is None or ts > hi:
         hi = ts
+    t = datetime.fromtimestamp(ts, tz=timezone.utc)
+    month = entry["months"].setdefault(
+        t.strftime("%Y%m"),
+        {"feeds": 0, "comments": 0, "replies": 0, "days": set()})
+    month[kind] += 1
+    month["days"].add(t.day)
     return (lo, hi)
 
 
 def _ymd_utc(ts):
     """int 秒 → UTC YYYYMMDD——与 archive 窗参同格式，可直接粘贴回命令。"""
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y%m%d")
+
+
+def _day_ranges(days):
+    """排序日 → 区间编码：[1,2,3,7,20,21] → "01-03 07 20-21"。"""
+    spans = []
+    start = prev = None
+    for d in days:
+        if start is None:
+            start = prev = d
+        elif d == prev + 1:
+            prev = d
+        else:
+            spans.append((start, prev))
+            start = prev = d
+    if start is not None:
+        spans.append((start, prev))
+    return " ".join(
+        "{0:02d}".format(a) if a == b else "{0:02d}-{1:02d}".format(a, b)
+        for a, b in spans)
+
+
+def _month_line(ym, m):
+    """逐月可用性行：计数 + 确切有数据的日子（可直接拼 YYYYMMDD 窗参）。"""
+    return "  {0}  {1} feeds · {2} comments · {3} replies · days {4}".format(
+        ym, m["feeds"], m["comments"], m["replies"],
+        _day_ranges(sorted(m["days"])) or "-")
 
 
 def _guild_stat_line(guild, e):
@@ -315,7 +352,7 @@ def archive_tree_stats(data_root):
     stats = {}
     for guild_root, guild in _iter_guild_dirs(data_root):
         entry = {"feeds": 0, "comments": 0, "replies": 0,
-                 "media_files": 0, "media_bytes": 0}
+                 "media_files": 0, "media_bytes": 0, "months": {}}
         span = (None, None)
         for fname in os.listdir(os.path.join(guild_root, "feeds")):
             shard_dir = os.path.join(guild_root, "feeds", fname)
@@ -324,8 +361,8 @@ def archive_tree_stats(data_root):
                     if not f.endswith(".json"):
                         continue
                     entry["feeds"] += 1
-                    span = _widen_span(
-                        span, os.path.join(shard_dir, f))
+                    span = _see_entity(
+                        entry, span, os.path.join(shard_dir, f), "feeds")
         comments_root = os.path.join(guild_root, "comments")
         if os.path.isdir(comments_root):
             for shard in os.listdir(comments_root):
@@ -339,8 +376,8 @@ def archive_tree_stats(data_root):
                     if not f.endswith(".json"):
                         continue
                     entry[key] += 1
-                    span = _widen_span(
-                        span, os.path.join(shard_dir, f))
+                    span = _see_entity(
+                        entry, span, os.path.join(shard_dir, f), key)
         entry["earliest_ts"], entry["latest_ts"] = span
         media_root = os.path.join(guild_root, "media")
         if os.path.isdir(media_root):
@@ -498,6 +535,8 @@ class Dispatcher:
         for guild in sorted(stats):
             e = stats[guild]
             lines.append(_guild_stat_line(guild, e))
+            for ym in sorted(e["months"]):
+                lines.append(_month_line(ym, e["months"][ym]))
             for k in totals:
                 totals[k] += e[k]
         lines.append("total  {0} feeds · {1} comments · {2} replies ·"
@@ -753,9 +792,13 @@ class Dispatcher:
                                    guild, self.data_root,
                                    ", ".join(sorted(stats))),
                     "data": {}}
-        lines = [_guild_stat_line(g, stats[g])
-                 for g in sorted(stats)
-                 if guild is None or g == guild]
+        lines = []
+        for g in sorted(stats):
+            if guild is not None and g != guild:
+                continue
+            lines.append(_guild_stat_line(g, stats[g]))
+            for ym in sorted(stats[g]["months"]):
+                lines.append(_month_line(ym, stats[g]["months"][ym]))
         lines.append("usage: archive <guild> <from> <to> [--apply]"
                      " [--force] [--output DIR]")
         lines.append("window (from, to] on entity createTime"

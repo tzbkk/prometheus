@@ -48,7 +48,7 @@ bash scripts/start_launcher.sh
 #    config show             分组全景（launcher/scraper/viewer/guilds/凭证掩码；盘-live 漂移可见）
 #    config set <key> <val>  键注册表路由（launcher→守护单写者；scraper/viewer→各自 conf
 #                           原子写+运行中 live 回显同步；未知键列出全部合法键与生效时机）
-#    stats                   每 guild 归档计数与 createTime 跨度（feeds/评论/回复/媒体与体积）
+#    stats                   每 guild 计数 + 逐月可用日（createTime 跨度、月份直方图、days 区间编码——窗参全集）
 #    health [target]         监督态 + API 探测逐行（state、restarts、运行中才探端口；
 #                           原 status 已并入——裸 health = 三目标，可单探）
 #    help / clear            帮助 / 清屏

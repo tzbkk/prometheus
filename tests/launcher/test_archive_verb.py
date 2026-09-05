@@ -168,3 +168,26 @@ def test_archive_empty_window_appends_data_span(tmp_path, monkeypatch):
     assert res["ok"] is True
     assert "no data in window (20240101, 20240102] for guild {0}"         " — nothing to archive.  data spans 20230101..20250101".format(
             guild) in res["message"]
+
+
+def test_archive_panorama_lists_month_day_availability(tmp_path):
+    """MD-161：archive 全景同样逐月列可用日——备份发现面与 stats 一致。"""
+    import json as _json
+    import os as _os
+
+    guild = "1000000000000001"
+    shard = _os.path.join(str(tmp_path), guild, "feeds", "aa")
+    _os.makedirs(shard)
+    for name, ts in (("B_x1", 1672531200),   # 2023-01-01
+                     ("B_x2", 1672617600),   # 2023-01-02
+                     ("B_x3", 1672876800)):  # 2023-01-05
+        with open(_os.path.join(shard, name + ".json"), "w",
+                  encoding="utf-8") as fh:
+            _json.dump({"id": name, "createTime": str(ts)}, fh)
+
+    d = Dispatcher(pm=SimpleNamespace(), config={}, config_path=None,
+                   data_root=str(tmp_path))
+    res = d.dispatch(CommandParser().parse("archive"))
+    assert res["ok"] is True
+    assert "  202301  3 feeds · 0 comments · 0 replies · days 01-02 05" \
+        in res["message"]

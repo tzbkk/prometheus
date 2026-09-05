@@ -74,6 +74,11 @@ def test_stats_counts_entity_tree_and_media_bytes(tmp_path):
         "feeds": 3, "comments": 2, "replies": 1,
         "media_files": 2, "media_bytes": 2560,
         "earliest_ts": TS_2023, "latest_ts": TS_2025,
+        "months": {
+            "202301": {"feeds": 1, "comments": 1, "replies": 0, "days": {1}},
+            "202401": {"feeds": 1, "comments": 1, "replies": 0, "days": {1}},
+            "202501": {"feeds": 1, "comments": 0, "replies": 1, "days": {1}},
+        },
     }
 
     d = Dispatcher(pm=None, config={}, config_path=None,
@@ -116,3 +121,33 @@ def test_stats_reports_data_spans_and_archive_usage(tmp_path):
     assert "· span 20230101..20250101" in res["message"]
     assert "usage: archive <guild> <from> <to> [--apply]" in res["message"]
     assert "(UTC YYYYMMDD)" in res["message"]
+
+
+def test_stats_lists_month_day_availability(tmp_path):
+    """MD-160：逐月计数 + 确切可用日（区间编码，空洞月缺席）。
+
+    span 只是模糊范围；月桶 days 才是可当窗参的 YYYYMMDD 全集——
+    连续日压缩为 01-02 式区间，空洞月直接不出现。
+    """
+    import os as _os
+
+    root = tmp_path / "data"
+    shard = root / GUILD / "feeds" / "cc"
+    shard.mkdir(parents=True)
+    # 2023-01-01 / 01-02 / 01-05（区间+孤岛）/ 03-10（空洞月后）
+    for name, ts in (("B_a", 1672531200), ("B_b", 1672617600),
+                     ("B_c", 1672876800), ("B_d", 1678406400)):
+        with open(_os.path.join(str(shard), name + ".json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"id": name, "createTime": str(ts)}, fh)
+
+    d = Dispatcher(pm=None, config={}, config_path=None,
+                   data_root=str(root))
+    res = d.dispatch(CommandParser().parse("stats"))
+
+    assert res["ok"] is True
+    assert "  202301  3 feeds · 0 comments · 0 replies · days 01-02 05" \
+        in res["message"]
+    assert "  202303  1 feeds · 0 comments · 0 replies · days 10" \
+        in res["message"]
+    assert "202302" not in res["message"]

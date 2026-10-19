@@ -229,6 +229,9 @@ launcher (Python, :9421) — 守护/客户端分离：监督守护（常驻，se
 
 archive（批处理 CLI，非常驻）— scripts/archive.py 时间窗 (from, to] 打包
   └── 引擎 src/archive/engine.py 只读消费 entity_store（对 data/ 严格只读）
+
+analysis（派生分析，非本体）— scripts/analysis/ 从实体树再生帖子级主题/分类/趋势产物，
+  输出到 gitignored 的 analysis/，不参与监督面
 ```
 
 三个常驻服务由 launcher 统一监督（崩溃自愈，累计重启计数可查）。archive 为批处理 CLI，按需手动/cron 运行，不在监督面。全部磁盘读写经 `src/entity_store`，派生索引（viewer 的 SQLite）可随时从实体树再生。
@@ -242,3 +245,4 @@ archive（批处理 CLI，非常驻）— scripts/archive.py 时间窗 (from, to
 | [doc/DATA_FORMAT.md](doc/DATA_FORMAT.md) | 实体树、`_p` 规格、归档包格式、常用查询 |
 | [doc/DEEP_BACKFILL.md](doc/DEEP_BACKFILL.md) | 深度回填现行方案：p_skey 获取、auth 通道全量分页 |
 | [doc/DEPLOYMENT.md](doc/DEPLOYMENT.md) | 目录结构、新机器安装、Viewer 部署、systemd、启动方式 |
+| [scripts/analysis/README.md](scripts/analysis/README.md) | 派生分析工具链（非本体）：主题聚类、粗类重鉴定、趋势图 |

@@ -15,3 +15,6 @@ __pycache__/
 .sisyphus/
 guild1.db
 .venv/
+
+# 分析产物（可随时由 scripts/analysis/topic_trends.py 再生）
+/analysis/

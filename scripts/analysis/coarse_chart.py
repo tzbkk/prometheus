@@ -33,7 +33,7 @@ def main():
     order = [k for k in ORDER if k in counts]
     texts = {json.loads(line)["feed_id"]: json.loads(line).get("text", "")
              for line in open(os.path.join(ANALYSIS, "docs_clean.jsonl"))}
-    from topic_trends import tokenize
+    from treemap_utils import tokenize
     members = defaultdict(list)
     for r in rows:
         members[r["coarse"]].append(texts.get(r["feed_id"], ""))
